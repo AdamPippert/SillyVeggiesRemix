@@ -40,10 +40,12 @@ python -m sillyveggiesremix.main
 ## Current gameplay status
 - Carrot enemies patrol/chase and melee attack when close
 - Spitter Squash ranged class fires goo projectiles from mid-range
+- Wave director scales enemy count/composition and projectile pressure over time
+- Pickups spawn per wave: health canisters and rope-boost canisters
 - Player has HP with brief invulnerability frames after taking damage
 - Procedural texture pass added (sky/floor gradients + wall striping)
-- Lightweight synthesized audio cues for fire/latch/capture/hit/spit
-- Round states: alive -> win or dead -> restart loop
+- Lightweight synthesized audio cues for fire/latch/capture/hit/spit/pickup
+- Round states: alive -> dead -> restart loop
 
 ## Roadmap
 - [x] Repository scaffold
@@ -57,3 +59,6 @@ python -m sillyveggiesremix.main
 - [x] Add death/win round restart flow
 - [x] Add audio + texture pass
 - [x] Add ranged veggie class (Spitter Squash)
+- [x] Add wave director (timed waves + scaling)
+- [x] Add pickup economy (health + rope boost)
+- [ ] Add boss veggie encounter
