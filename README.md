@@ -29,11 +29,19 @@ pip install -e .
 python -m sillyveggiesremix.main
 ```
 
+## Current prototype controls
+- Move: W/A/S/D
+- Turn: Left/Right arrows
+- Fire lasso: tap Space
+- Reel target: hold Space when latched
+
 ## Roadmap
 - [x] Repository scaffold
 - [x] Core concept and GDD draft
-- [ ] Greybox level with farm obstacles
-- [ ] Player movement + look controls
-- [ ] Rope projectile + latch logic
-- [ ] Vegetable AI + capture states
-- [ ] HUD, combos, timer, score
+- [x] Greybox level with farm obstacles
+- [x] Player movement + look controls
+- [x] Rope projectile + latch logic
+- [x] Vegetable AI + capture states
+- [x] HUD, combos, timer, score
+- [ ] Add enemy attacks and player damage loop
+- [ ] Add audio + texture pass
