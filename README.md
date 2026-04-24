@@ -39,7 +39,10 @@ python -m sillyveggiesremix.main
 
 ## Current gameplay status
 - Carrot enemies patrol/chase and melee attack when close
+- Spitter Squash ranged class fires goo projectiles from mid-range
 - Player has HP with brief invulnerability frames after taking damage
+- Procedural texture pass added (sky/floor gradients + wall striping)
+- Lightweight synthesized audio cues for fire/latch/capture/hit/spit
 - Round states: alive -> win or dead -> restart loop
 
 ## Roadmap
@@ -52,4 +55,5 @@ python -m sillyveggiesremix.main
 - [x] HUD, combos, timer, score
 - [x] Add enemy attacks and player damage loop
 - [x] Add death/win round restart flow
-- [ ] Add audio + texture pass
+- [x] Add audio + texture pass
+- [x] Add ranged veggie class (Spitter Squash)

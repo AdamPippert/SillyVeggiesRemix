@@ -1,6 +1,7 @@
 import math
 import random
 import sys
+from array import array
 
 import pygame
 
@@ -30,6 +31,39 @@ WORLD_MAP = [
 ]
 
 
+class AudioBank:
+    def __init__(self):
+        self.enabled = False
+        self.sounds = {}
+
+    def init(self):
+        try:
+            pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=512)
+            self.sounds["lasso_fire"] = self._tone(540, 45, 0.25)
+            self.sounds["lasso_latch"] = self._tone(760, 65, 0.2)
+            self.sounds["capture"] = self._tone(980, 95, 0.23)
+            self.sounds["player_hit"] = self._tone(170, 110, 0.3)
+            self.sounds["spit"] = self._tone(260, 60, 0.2)
+            self.enabled = True
+        except pygame.error:
+            self.enabled = False
+
+    def _tone(self, freq_hz: float, dur_ms: int, volume: float):
+        sample_rate = 22050
+        samples = int(sample_rate * dur_ms / 1000)
+        buf = array("h")
+        for i in range(samples):
+            t = i / sample_rate
+            env = 1.0 - (i / samples)
+            val = int(32767 * volume * env * math.sin(2 * math.pi * freq_hz * t))
+            buf.append(val)
+        return pygame.mixer.Sound(buffer=buf.tobytes())
+
+    def play(self, key: str):
+        if self.enabled and key in self.sounds:
+            self.sounds[key].play()
+
+
 def is_wall(x: float, y: float) -> bool:
     if y < 0 or y >= len(WORLD_MAP) or x < 0 or x >= len(WORLD_MAP[0]):
         return True
@@ -52,6 +86,26 @@ def has_line_of_sight(x1: float, y1: float, x2: float, y2: float) -> bool:
     return True
 
 
+def draw_background(screen):
+    # Sky gradient + subtle scanlines
+    for y in range(HALF_H):
+        k = y / HALF_H
+        r = int(55 + 35 * (1 - k))
+        g = int(95 + 45 * (1 - k))
+        b = int(145 + 35 * (1 - k))
+        pygame.draw.line(screen, (r, g, b), (0, y), (WIDTH, y))
+
+    # Dirt floor gradient with horizontal bands to fake texture
+    for y in range(HALF_H, HEIGHT):
+        k = (y - HALF_H) / HALF_H
+        r = int(95 - 30 * k)
+        g = int(65 - 25 * k)
+        b = int(40 - 20 * k)
+        pygame.draw.line(screen, (r, g, b), (0, y), (WIDTH, y))
+        if y % 22 == 0:
+            pygame.draw.line(screen, (70, 46, 30), (0, y), (WIDTH, y))
+
+
 def cast_rays(screen, px, py, angle):
     start_angle = angle - HALF_FOV
     for ray in range(NUM_RAYS):
@@ -69,9 +123,23 @@ def cast_rays(screen, px, py, angle):
 
         depth *= math.cos(angle - ray_angle)
         wall_h = min(int(HEIGHT / (depth + 0.0001)), HEIGHT)
+
         shade = max(30, 255 - int(depth * 35))
-        color = (shade // 2, shade // 2, shade // 3)
-        pygame.draw.rect(screen, color, (ray * SCALE, HALF_H - wall_h // 2, SCALE + 1, wall_h))
+        wood_variation = (ray % 7) * 3
+        color = (
+            max(20, shade // 2 + wood_variation),
+            max(20, shade // 2 - 8 + wood_variation),
+            max(15, shade // 3 - 10),
+        )
+        wall_rect = (ray * SCALE, HALF_H - wall_h // 2, SCALE + 1, wall_h)
+        pygame.draw.rect(screen, color, wall_rect)
+        if ray % 3 == 0:
+            pygame.draw.line(
+                screen,
+                (max(0, color[0] - 25), max(0, color[1] - 25), max(0, color[2] - 20)),
+                (ray * SCALE, HALF_H - wall_h // 2),
+                (ray * SCALE, HALF_H + wall_h // 2),
+            )
 
 
 def project_sprite(px, py, angle, sx, sy):
@@ -117,7 +185,7 @@ def spawn_veggies():
             "attack_cd": 0.8,
         },
         {
-            "kind": "carrot",
+            "kind": "spitter",
             "x": 8.5,
             "y": 6.5,
             "vx": 0.0,
@@ -144,17 +212,41 @@ def draw_veggies(screen, px, py, angle, veggies):
     projected.sort(reverse=True)
     for _, idx, screen_x, screen_y, size in projected:
         v = veggies[idx]
-        col = (235, 120, 40) if v["kind"] == "carrot" else (140, 210, 90)
+        if v["kind"] == "carrot":
+            col = (235, 120, 40)
+            accent = (255, 190, 90)
+        else:
+            col = (115, 170, 70)
+            accent = (180, 230, 130)
+
         body = pygame.Rect(screen_x - size // 2, screen_y - size // 2, size, size)
         pygame.draw.rect(screen, col, body)
         pygame.draw.rect(screen, (35, 35, 35), body, 2)
 
+        cap = pygame.Rect(screen_x - size // 4, screen_y - size // 2 - 4, size // 2, 5)
+        pygame.draw.rect(screen, accent, cap)
+
         if v["attack_cd"] < 0.15:
-            blink = pygame.Rect(screen_x - size // 4, screen_y - size // 2 - 6, size // 2, 4)
+            blink = pygame.Rect(screen_x - size // 4, screen_y - size // 2 - 10, size // 2, 4)
             pygame.draw.rect(screen, (255, 50, 50), blink)
 
 
-def draw_minimap(screen, px, py, veggies):
+def draw_projectiles(screen, px, py, angle, shots):
+    projected = []
+    for i, s in enumerate(shots):
+        p = project_sprite(px, py, angle, s["x"], s["y"])
+        if p is None:
+            continue
+        sx, sy, size, dist = p
+        projected.append((dist, i, sx, sy, max(4, size // 5)))
+
+    projected.sort(reverse=True)
+    for _, _, sx, sy, rad in projected:
+        pygame.draw.circle(screen, (140, 255, 120), (sx, sy), rad)
+        pygame.draw.circle(screen, (40, 70, 30), (sx, sy), max(2, rad // 2))
+
+
+def draw_minimap(screen, px, py, veggies, shots):
     tile = 12
     ox, oy = 16, 16
     for j, row in enumerate(WORLD_MAP):
@@ -169,12 +261,47 @@ def draw_minimap(screen, px, py, veggies):
     for v in veggies:
         if v["captured"]:
             continue
-        pygame.draw.circle(screen, (235, 120, 40), (ox + int(v["x"] * tile), oy + int(v["y"] * tile)), 3)
+        vc = (235, 120, 40) if v["kind"] == "carrot" else (120, 210, 80)
+        pygame.draw.circle(screen, vc, (ox + int(v["x"] * tile), oy + int(v["y"] * tile)), 3)
+
+    for s in shots:
+        pygame.draw.circle(screen, (140, 255, 120), (ox + int(s["x"] * tile), oy + int(s["y"] * tile)), 2)
 
     pygame.draw.circle(screen, (255, 230, 120), (ox + int(px * tile), oy + int(py * tile)), 4)
 
 
+def update_shots(shots, dt, px, py, hp, player_invuln):
+    kept = []
+    if player_invuln > 0:
+        can_hit_player = False
+    else:
+        can_hit_player = True
+
+    for s in shots:
+        nx = s["x"] + s["dx"] * s["speed"] * dt
+        ny = s["y"] + s["dy"] * s["speed"] * dt
+        ttl = s["ttl"] - dt
+
+        if ttl <= 0 or is_wall(nx, ny):
+            continue
+
+        hit_player = False
+        if can_hit_player:
+            if math.hypot(px - nx, py - ny) < 0.34:
+                hp = max(0, hp - 8)
+                player_invuln = 0.45
+                can_hit_player = False
+                hit_player = True
+
+        if not hit_player:
+            s["x"], s["y"], s["ttl"] = nx, ny, ttl
+            kept.append(s)
+
+    return kept, hp, player_invuln
+
+
 def update_veggies(veggies, px, py, dt):
+    spawned_shots = []
     for v in veggies:
         if v["captured"]:
             continue
@@ -185,13 +312,18 @@ def update_veggies(veggies, px, py, dt):
         dx = px - v["x"]
         dy = py - v["y"]
         dist = math.hypot(dx, dy)
+        sees_player = has_line_of_sight(v["x"], v["y"], px, py)
 
-        if dist < 4.5 and has_line_of_sight(v["x"], v["y"], px, py):
-            speed = 1.0
+        if dist < 4.5 and sees_player:
+            speed = 1.0 if v["kind"] == "carrot" else 0.72
             if dist > 0.001:
                 nx, ny = dx / dist, dy / dist
             else:
                 nx, ny = 0.0, 0.0
+
+            if v["kind"] == "spitter" and dist < 2.8:
+                nx, ny = -nx, -ny
+                speed = 0.9
         else:
             v["wander_t"] -= dt
             if v["wander_t"] <= 0:
@@ -214,14 +346,26 @@ def update_veggies(veggies, px, py, dt):
 
         v["attack_cd"] = max(0.0, v["attack_cd"] - dt)
 
+        if v["kind"] == "spitter" and v["attack_cd"] <= 0 and sees_player and dist < 6.3:
+            if dist > 0.001:
+                sd_x, sd_y = dx / dist, dy / dist
+            else:
+                sd_x, sd_y = 0.0, 0.0
+            spawned_shots.append({"x": v["x"], "y": v["y"], "dx": sd_x, "dy": sd_y, "speed": 3.6, "ttl": 2.1})
+            v["attack_cd"] = 1.45
 
-def apply_enemy_attacks(veggies, px, py, hp, player_invuln):
+    return spawned_shots
+
+
+def apply_enemy_melee(veggies, px, py, hp, player_invuln):
     if player_invuln > 0:
         return hp, player_invuln, False
 
     took_hit = False
     for v in veggies:
         if v["captured"] or v["latched"]:
+            continue
+        if v["kind"] != "carrot":
             continue
         if v["attack_cd"] > 0:
             continue
@@ -295,6 +439,7 @@ def reset_round():
         "py": py,
         "angle": angle,
         "veggies": spawn_veggies(),
+        "shots": [],
         "lasso_state": "idle",
         "lasso_target": None,
         "lasso_timer": 0.0,
@@ -313,6 +458,9 @@ def main():
     pygame.display.set_caption("SillyVeggiesRemix - prototype")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("consolas", 24)
+
+    audio = AudioBank()
+    audio.init()
 
     state = reset_round()
     score = 0
@@ -368,7 +516,17 @@ def main():
             if not is_wall(state["px"], next_y):
                 state["py"] = next_y
 
-            update_veggies(state["veggies"], state["px"], state["py"], dt)
+            new_shots = update_veggies(state["veggies"], state["px"], state["py"], dt)
+            if new_shots:
+                state["shots"].extend(new_shots)
+                audio.play("spit")
+
+            hp_before_shots = state["hp"]
+            state["shots"], state["hp"], state["player_invuln"] = update_shots(
+                state["shots"], dt, state["px"], state["py"], state["hp"], state["player_invuln"]
+            )
+            if state["hp"] < hp_before_shots:
+                audio.play("player_hit")
 
             state["combo_timer"] -= dt
             if state["combo_timer"] <= 0:
@@ -377,9 +535,13 @@ def main():
             if state["break_timer"] > 0:
                 state["break_timer"] -= dt
 
-            state["hp"], state["player_invuln"], _ = apply_enemy_attacks(
+            old_hp = state["hp"]
+            state["hp"], state["player_invuln"], melee_hit = apply_enemy_melee(
                 state["veggies"], state["px"], state["py"], state["hp"], state["player_invuln"]
             )
+            if state["hp"] < old_hp or melee_hit:
+                audio.play("player_hit")
+
             if state["hp"] <= 0:
                 state["round_state"] = "dead"
                 if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):
@@ -394,11 +556,13 @@ def main():
             if state["lasso_state"] == "idle" and pressed and state["break_timer"] <= 0:
                 state["lasso_state"] = "fired"
                 state["lasso_timer"] = 0.12
+                audio.play("lasso_fire")
                 target_idx, _ = select_lasso_target(state["px"], state["py"], state["angle"], state["veggies"])
                 if target_idx is not None:
                     state["lasso_target"] = target_idx
                     state["veggies"][target_idx]["latched"] = True
                     state["lasso_state"] = "latched"
+                    audio.play("lasso_latch")
 
             elif state["lasso_state"] == "fired":
                 state["lasso_timer"] -= dt
@@ -441,6 +605,7 @@ def main():
                                 target["latched"] = False
                                 state["lasso_target"] = None
                                 state["lasso_state"] = "idle"
+                                audio.play("capture")
 
                                 if state["combo_timer"] > 0:
                                     state["combo"] += 1
@@ -457,12 +622,11 @@ def main():
         else:
             prev_space = keys[pygame.K_SPACE]
 
-        screen.fill((80, 120, 170), (0, 0, WIDTH, HALF_H))
-        screen.fill((95, 65, 40), (0, HALF_H, WIDTH, HALF_H))
-
+        draw_background(screen)
         cast_rays(screen, state["px"], state["py"], state["angle"])
         draw_veggies(screen, state["px"], state["py"], state["angle"], state["veggies"])
-        draw_minimap(screen, state["px"], state["py"], state["veggies"])
+        draw_projectiles(screen, state["px"], state["py"], state["angle"], state["shots"])
+        draw_minimap(screen, state["px"], state["py"], state["veggies"], state["shots"])
 
         if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):
             target = state["veggies"][state["lasso_target"]]
