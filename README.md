@@ -44,6 +44,9 @@ python -m sillyveggiesremix.main
 - Pickups spawn per wave: health canisters and rope-boost canisters
 - Boss Turnip appears every 5th wave with lasso-only weak-point phases (exposed vs armored)
 - Boss arena pressure patterns: radial burst phase + focused triple-shot phase
+- Boss-transition environment traps now active:
+  - armored transition -> tractor sweep lane + rake mine
+  - exposed transition -> pallet crusher pulse zone
 - Player has HP with brief invulnerability frames after taking damage
 - Procedural texture pass added (sky/floor gradients + wall striping)
 - Lightweight synthesized audio cues for fire/latch/capture/hit/spit/pickup
@@ -64,4 +67,5 @@ python -m sillyveggiesremix.main
 - [x] Add wave director (timed waves + scaling)
 - [x] Add pickup economy (health + rope boost)
 - [x] Add boss veggie encounter
-- [ ] Add boss-specific environment hazards/traps
+- [x] Add boss-specific environment hazards/traps
+- [ ] Add multi-room map progression and gate keys

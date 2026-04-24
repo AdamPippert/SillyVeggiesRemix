@@ -328,6 +328,29 @@ def draw_pickups(screen, px, py, angle, pickups):
         pygame.draw.circle(screen, core, (sx, sy), max(2, rad // 2))
 
 
+def draw_hazards(screen, px, py, angle, hazards):
+    projected = []
+    for i, h in enumerate(hazards):
+        proj = project_sprite(px, py, angle, h["x"], h["y"])
+        if proj is None:
+            continue
+        sx, sy, size, dist = proj
+        projected.append((dist, i, sx, sy, max(5, size // 6)))
+
+    projected.sort(reverse=True)
+    for _, i, sx, sy, rad in projected:
+        h = hazards[i]
+        if h["kind"] == "tractor_sweep":
+            pygame.draw.rect(screen, (210, 160, 70), (sx - rad, sy - rad, rad * 2, rad * 2))
+        elif h["kind"] == "pallet_crusher":
+            pulse = h.get("pulse_radius", 0.5)
+            rr = max(rad, int(rad + pulse * 5))
+            pygame.draw.circle(screen, (170, 120, 70), (sx, sy), rr, 2)
+        else:
+            color = (220, 220, 80) if h.get("armed", False) else (120, 120, 70)
+            pygame.draw.circle(screen, color, (sx, sy), rad)
+
+
 def draw_projectiles(screen, px, py, angle, shots):
     projected = []
     for i, s in enumerate(shots):
@@ -343,7 +366,7 @@ def draw_projectiles(screen, px, py, angle, shots):
         pygame.draw.circle(screen, (40, 70, 30), (sx, sy), max(2, rad // 2))
 
 
-def draw_minimap(screen, px, py, veggies, shots, pickups):
+def draw_minimap(screen, px, py, veggies, shots, pickups, hazards):
     tile = 12
     ox, oy = 16, 16
     for j, row in enumerate(WORLD_MAP):
@@ -373,6 +396,10 @@ def draw_minimap(screen, px, py, veggies, shots, pickups):
     for p in pickups:
         pc = (255, 90, 90) if p["kind"] == "health" else (80, 180, 255)
         pygame.draw.circle(screen, pc, (ox + int(p["x"] * tile), oy + int(p["y"] * tile)), 2)
+
+    for h in hazards:
+        hc = (220, 160, 70) if h["kind"] == "tractor_sweep" else (180, 130, 70) if h["kind"] == "pallet_crusher" else (220, 220, 80)
+        pygame.draw.circle(screen, hc, (ox + int(h["x"] * tile), oy + int(h["y"] * tile)), 2)
 
     pygame.draw.circle(screen, (255, 230, 120), (ox + int(px * tile), oy + int(py * tile)), 4)
 
@@ -411,6 +438,119 @@ def update_pickups(pickups, dt, px, py, hp, rope_boost_timer):
     return kept, hp, rope_boost_timer, picked_any
 
 
+def spawn_transition_hazards(boss, wave, exposed_now, px, py):
+    hazards = []
+
+    if exposed_now:
+        # On exposed swap: localized crusher pulse near boss/player lane
+        cx = (boss["x"] + px) / 2
+        cy = (boss["y"] + py) / 2
+        if is_wall(cx, cy):
+            cx, cy = boss["x"], boss["y"]
+        hazards.append(
+            {
+                "kind": "pallet_crusher",
+                "x": cx,
+                "y": cy,
+                "ttl": 3.2,
+                "pulse_t": 0.0,
+                "pulse_radius": 0.4,
+                "max_radius": 2.0 + min(1.2, wave * 0.06),
+            }
+        )
+    else:
+        # On armored swap: tractor sweep lane + a rake mine nearby
+        lane_y = max(1.5, min(len(WORLD_MAP) - 1.5, boss["y"]))
+        hazards.append(
+            {
+                "kind": "tractor_sweep",
+                "x": 1.2,
+                "y": lane_y,
+                "dx": 1.0,
+                "speed": 2.4 + min(1.4, wave * 0.08),
+                "ttl": 5.2,
+                "radius": 0.75,
+            }
+        )
+        mx, my = random_open_position(1.3, px, py)
+        hazards.append(
+            {
+                "kind": "rake_mine",
+                "x": mx,
+                "y": my,
+                "ttl": 10.0,
+                "armed_in": 1.0,
+                "armed": False,
+                "triggered": False,
+                "blast_t": 0.0,
+                "blast_radius": 1.35,
+                "did_hit": False,
+            }
+        )
+
+    return hazards
+
+
+def update_hazards(hazards, dt, px, py, hp, player_invuln):
+    kept = []
+    took_hit = False
+
+    for h in hazards:
+        ttl = h.get("ttl", 0.0) - dt
+        if ttl <= 0:
+            continue
+        h["ttl"] = ttl
+
+        if h["kind"] == "tractor_sweep":
+            nx = h["x"] + h["dx"] * h["speed"] * dt
+            if is_wall(nx, h["y"]):
+                h["ttl"] = 0
+                continue
+            h["x"] = nx
+            if player_invuln <= 0 and math.hypot(px - h["x"], py - h["y"]) < h.get("radius", 0.7):
+                hp = max(0, hp - 14)
+                player_invuln = 0.5
+                took_hit = True
+
+        elif h["kind"] == "pallet_crusher":
+            h["pulse_t"] = h.get("pulse_t", 0.0) + dt
+            mr = h.get("max_radius", 2.0)
+            h["pulse_radius"] = 0.35 + abs(math.sin(h["pulse_t"] * 6.4)) * mr
+            if player_invuln <= 0 and math.hypot(px - h["x"], py - h["y"]) < h["pulse_radius"]:
+                hp = max(0, hp - 9)
+                player_invuln = 0.45
+                took_hit = True
+
+        else:  # rake_mine
+            if not h.get("armed", False):
+                h["armed_in"] = h.get("armed_in", 0.0) - dt
+                if h["armed_in"] <= 0:
+                    h["armed"] = True
+            elif not h.get("triggered", False):
+                if math.hypot(px - h["x"], py - h["y"]) < 0.95:
+                    h["triggered"] = True
+                    h["blast_t"] = 0.38
+            else:
+                h["blast_t"] -= dt
+                if h["blast_t"] <= 0:
+                    h["ttl"] = 0
+                    continue
+                if (
+                    not h.get("did_hit", False)
+                    and player_invuln <= 0
+                    and math.hypot(px - h["x"], py - h["y"]) < h.get("blast_radius", 1.25)
+                ):
+                    hp = max(0, hp - 18)
+                    player_invuln = 0.6
+                    h["did_hit"] = True
+                    took_hit = True
+
+        if h.get("ttl", 0) > 0:
+            kept.append(h)
+
+    return kept, hp, player_invuln, took_hit
+
+
 def update_shots(shots, dt, px, py, hp, player_invuln):
     kept = []
     if player_invuln > 0:
@@ -443,6 +583,7 @@ def update_shots(shots, dt, px, py, hp, player_invuln):
 
 def update_veggies(veggies, px, py, dt, wave):
     spawned_shots = []
+    spawned_hazards = []
     wave_speed_scale = 1.0 + min(0.45, wave * 0.04)
     for v in veggies:
         if v["captured"]:
@@ -461,6 +602,7 @@ def update_veggies(veggies, px, py, dt, wave):
             if v["phase_timer"] <= 0:
                 v["exposed"] = not v.get("exposed", True)
                 v["phase_timer"] = 3.6 if v["exposed"] else 2.4
+                spawned_hazards.extend(spawn_transition_hazards(v, wave, v["exposed"], px, py))
 
             if dist > 0.001:
                 nx, ny = dx / dist, dy / dist
@@ -553,7 +695,7 @@ def update_veggies(veggies, px, py, dt, wave):
             spawned_shots.append({"x": v["x"], "y": v["y"], "dx": sd_x, "dy": sd_y, "speed": shot_speed, "ttl": 2.1})
             v["attack_cd"] = max(0.75, 1.45 - wave * 0.05)
 
-    return spawned_shots
+    return spawned_shots, spawned_hazards
 
 
 def apply_enemy_melee(veggies, px, py, hp, player_invuln):
@@ -667,6 +809,7 @@ def reset_round():
         "wave_spawn_timer": 0.0,
         "veggies": spawn_veggies(start_wave, px, py),
         "shots": [],
+        "hazards": [],
         "pickups": spawn_wave_pickups(start_wave, px, py),
         "lasso_state": "idle",
         "lasso_target": None,
@@ -746,16 +889,25 @@ def main():
             if not is_wall(state["px"], next_y):
                 state["py"] = next_y
 
-            new_shots = update_veggies(state["veggies"], state["px"], state["py"], dt, state["wave"])
+            new_shots, new_hazards = update_veggies(state["veggies"], state["px"], state["py"], dt, state["wave"])
             if new_shots:
                 state["shots"].extend(new_shots)
                 audio.play("spit")
+            if new_hazards:
+                state["hazards"].extend(new_hazards)
 
             hp_before_shots = state["hp"]
             state["shots"], state["hp"], state["player_invuln"] = update_shots(
                 state["shots"], dt, state["px"], state["py"], state["hp"], state["player_invuln"]
             )
             if state["hp"] < hp_before_shots:
+                audio.play("player_hit")
+
+            hp_before_haz = state["hp"]
+            state["hazards"], state["hp"], state["player_invuln"], hazard_hit = update_hazards(
+                state["hazards"], dt, state["px"], state["py"], state["hp"], state["player_invuln"]
+            )
+            if state["hp"] < hp_before_haz or hazard_hit:
                 audio.play("player_hit")
 
             state["pickups"], state["hp"], state["rope_boost_timer"], picked_any = update_pickups(
@@ -892,6 +1044,7 @@ def main():
                     if state["wave_spawn_timer"] <= 0:
                         state["wave"] += 1
                         state["veggies"] = spawn_veggies(state["wave"], state["px"], state["py"])
+                        state["hazards"] = []
                         state["pickups"].extend(spawn_wave_pickups(state["wave"], state["px"], state["py"]))
                         state["wave_spawn_timer"] = 0.0
 
@@ -902,8 +1055,9 @@ def main():
         cast_rays(screen, state["px"], state["py"], state["angle"])
         draw_veggies(screen, state["px"], state["py"], state["angle"], state["veggies"])
         draw_pickups(screen, state["px"], state["py"], state["angle"], state["pickups"])
+        draw_hazards(screen, state["px"], state["py"], state["angle"], state["hazards"])
         draw_projectiles(screen, state["px"], state["py"], state["angle"], state["shots"])
-        draw_minimap(screen, state["px"], state["py"], state["veggies"], state["shots"], state["pickups"])
+        draw_minimap(screen, state["px"], state["py"], state["veggies"], state["shots"], state["pickups"], state["hazards"])
 
         if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):
             target = state["veggies"][state["lasso_target"]]
