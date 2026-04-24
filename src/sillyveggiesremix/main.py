@@ -34,6 +34,18 @@ WORLD_MAP = [
     "################",
 ]
 
+ROOM_WAVES_REQUIRED = 2
+ROOMS = [
+    {"name": "Pallet Yard", "bounds": (1.2, 1.2, 5.2, 9.6), "spawn": (2.5, 2.5, 0.0)},
+    {"name": "Tractor Bay", "bounds": (6.0, 1.2, 10.0, 9.6), "spawn": (7.2, 2.5, 0.0)},
+    {"name": "Tool Depot", "bounds": (11.0, 1.2, 14.6, 9.6), "spawn": (12.4, 2.5, 0.0)},
+]
+GATE_SEGMENTS = [
+    {"x": 5.5, "y1": 1.15, "y2": 9.85},
+    {"x": 10.5, "y1": 1.15, "y2": 9.85},
+]
+CURRENT_GATE_LOCKS = [True, True]
+
 
 class AudioBank:
     def __init__(self):
@@ -69,10 +81,25 @@ class AudioBank:
             self.sounds[key].play()
 
 
+def sync_gate_locks(unlocked_keys: int):
+    global CURRENT_GATE_LOCKS
+    CURRENT_GATE_LOCKS = [idx >= unlocked_keys for idx in range(len(GATE_SEGMENTS))]
+
+
+def gate_blocked(x: float, y: float) -> bool:
+    for idx, g in enumerate(GATE_SEGMENTS):
+        if idx < len(CURRENT_GATE_LOCKS) and CURRENT_GATE_LOCKS[idx]:
+            if abs(x - g["x"]) < 0.22 and g["y1"] <= y <= g["y2"]:
+                return True
+    return False
+
+
 def is_wall(x: float, y: float) -> bool:
     if y < 0 or y >= len(WORLD_MAP) or x < 0 or x >= len(WORLD_MAP[0]):
         return True
-    return WORLD_MAP[int(y)][int(x)] == "#"
+    if WORLD_MAP[int(y)][int(x)] == "#":
+        return True
+    return gate_blocked(x, y)
 
 
 def has_line_of_sight(x1: float, y1: float, x2: float, y2: float) -> bool:
@@ -91,15 +118,24 @@ def has_line_of_sight(x1: float, y1: float, x2: float, y2: float) -> bool:
     return True
 
 
-def random_open_position(min_dist_from_player=0.0, px=0.0, py=0.0):
+def random_open_position(min_dist_from_player=0.0, px=0.0, py=0.0, bounds=None):
     open_tiles = []
+    bx1 = by1 = bx2 = by2 = None
+    if bounds is not None:
+        bx1, by1, bx2, by2 = bounds
+
     for y, row in enumerate(WORLD_MAP):
         for x, ch in enumerate(row):
-            if ch != "#":
-                cx = x + 0.5
-                cy = y + 0.5
-                if math.hypot(cx - px, cy - py) >= min_dist_from_player:
-                    open_tiles.append((cx, cy))
+            if ch == "#":
+                continue
+            cx = x + 0.5
+            cy = y + 0.5
+            if bounds is not None and not (bx1 <= cx <= bx2 and by1 <= cy <= by2):
+                continue
+            if gate_blocked(cx, cy):
+                continue
+            if math.hypot(cx - px, cy - py) >= min_dist_from_player:
+                open_tiles.append((cx, cy))
     if not open_tiles:
         return 1.5, 1.5
     return random.choice(open_tiles)
@@ -179,12 +215,12 @@ def project_sprite(px, py, angle, sx, sy):
     return screen_x, screen_y, size, dist
 
 
-def spawn_veggies(wave: int, px: float, py: float):
+def spawn_veggies(wave: int, px: float, py: float, bounds=None):
     wave = max(1, wave)
 
     # Boss cadence: every Nth wave
     if wave % BOSS_WAVE_INTERVAL == 0:
-        bx, by = random_open_position(4.0, px, py)
+        bx, by = random_open_position(4.0, px, py, bounds)
         boss = {
             "kind": "boss",
             "x": bx,
@@ -203,7 +239,7 @@ def spawn_veggies(wave: int, px: float, py: float):
         support_count = min(4, 1 + wave // BOSS_WAVE_INTERVAL)
         support = []
         for i in range(support_count):
-            sx, sy = random_open_position(3.0, px, py)
+            sx, sy = random_open_position(3.0, px, py, bounds)
             kind = "spitter" if i % 2 == 0 else "carrot"
             support.append(
                 {
@@ -226,7 +262,7 @@ def spawn_veggies(wave: int, px: float, py: float):
 
     veggies = []
     for _ in range(carrots):
-        x, y = random_open_position(3.0, px, py)
+        x, y = random_open_position(3.0, px, py, bounds)
         veggies.append(
             {
                 "kind": "carrot",
@@ -242,7 +278,7 @@ def spawn_veggies(wave: int, px: float, py: float):
         )
 
     for _ in range(spitters):
-        x, y = random_open_position(3.0, px, py)
+        x, y = random_open_position(3.0, px, py, bounds)
         veggies.append(
             {
                 "kind": "spitter",
@@ -322,10 +358,30 @@ def draw_pickups(screen, px, py, angle, pickups):
     projected.sort(reverse=True)
     for _, i, sx, sy, rad in projected:
         p = pickups[i]
-        color = (255, 70, 70) if p["kind"] == "health" else (80, 180, 255)
-        core = (250, 235, 235) if p["kind"] == "health" else (220, 240, 255)
+        if p["kind"] == "health":
+            color, core = (255, 70, 70), (250, 235, 235)
+        elif p["kind"] == "rope":
+            color, core = (80, 180, 255), (220, 240, 255)
+        else:
+            color, core = (245, 210, 80), (255, 245, 190)
         pygame.draw.circle(screen, color, (sx, sy), rad)
         pygame.draw.circle(screen, core, (sx, sy), max(2, rad // 2))
+
+
+def draw_gates(screen, px, py, angle):
+    for idx, g in enumerate(GATE_SEGMENTS):
+        if idx >= len(CURRENT_GATE_LOCKS) or not CURRENT_GATE_LOCKS[idx]:
+            continue
+        steps = 6
+        for s in range(steps):
+            gy = g["y1"] + (g["y2"] - g["y1"]) * (s / (steps - 1))
+            proj = project_sprite(px, py, angle, g["x"], gy)
+            if proj is None:
+                continue
+            sx, sy, size, _ = proj
+            w = max(6, size // 7)
+            h = max(10, size // 2)
+            pygame.draw.rect(screen, (150, 110, 70), (sx - w // 2, sy - h // 2, w, h))
 
 
 def draw_hazards(screen, px, py, angle, hazards):
@@ -394,23 +450,33 @@ def draw_minimap(screen, px, py, veggies, shots, pickups, hazards):
         pygame.draw.circle(screen, (140, 255, 120), (ox + int(s["x"] * tile), oy + int(s["y"] * tile)), 2)
 
     for p in pickups:
-        pc = (255, 90, 90) if p["kind"] == "health" else (80, 180, 255)
+        if p["kind"] == "health":
+            pc = (255, 90, 90)
+        elif p["kind"] == "rope":
+            pc = (80, 180, 255)
+        else:
+            pc = (245, 210, 80)
         pygame.draw.circle(screen, pc, (ox + int(p["x"] * tile), oy + int(p["y"] * tile)), 2)
 
     for h in hazards:
         hc = (220, 160, 70) if h["kind"] == "tractor_sweep" else (180, 130, 70) if h["kind"] == "pallet_crusher" else (220, 220, 80)
         pygame.draw.circle(screen, hc, (ox + int(h["x"] * tile), oy + int(h["y"] * tile)), 2)
 
+    for idx, g in enumerate(GATE_SEGMENTS):
+        if idx < len(CURRENT_GATE_LOCKS) and CURRENT_GATE_LOCKS[idx]:
+            ymid = (g["y1"] + g["y2"]) / 2
+            pygame.draw.rect(screen, (170, 120, 70), (ox + int(g["x"] * tile) - 1, oy + int(ymid * tile) - 16, 3, 32))
+
     pygame.draw.circle(screen, (255, 230, 120), (ox + int(px * tile), oy + int(py * tile)), 4)
 
 
-def spawn_wave_pickups(wave: int, px: float, py: float):
+def spawn_wave_pickups(wave: int, px: float, py: float, bounds=None):
     pickups = []
-    hx, hy = random_open_position(2.0, px, py)
+    hx, hy = random_open_position(2.0, px, py, bounds)
     pickups.append({"kind": "health", "x": hx, "y": hy, "ttl": 22.0})
 
     if wave % 2 == 0:
-        rx, ry = random_open_position(2.0, px, py)
+        rx, ry = random_open_position(2.0, px, py, bounds)
         pickups.append({"kind": "rope", "x": rx, "y": ry, "ttl": 18.0})
     return pickups
 
@@ -418,6 +484,7 @@ def spawn_wave_pickups(wave: int, px: float, py: float):
 def update_pickups(pickups, dt, px, py, hp, rope_boost_timer):
     kept = []
     picked_any = False
+    keys_found = 0
 
     for p in pickups:
         ttl = p["ttl"] - dt
@@ -428,17 +495,19 @@ def update_pickups(pickups, dt, px, py, hp, rope_boost_timer):
             picked_any = True
             if p["kind"] == "health":
                 hp = min(MAX_HP, hp + 25)
-            else:
+            elif p["kind"] == "rope":
                 rope_boost_timer = max(rope_boost_timer, ROPE_BOOST_DURATION)
+            elif p["kind"] == "gate_key":
+                keys_found += 1
             continue
 
         p["ttl"] = ttl
         kept.append(p)
 
-    return kept, hp, rope_boost_timer, picked_any
+    return kept, hp, rope_boost_timer, picked_any, keys_found
 
 
-def spawn_transition_hazards(boss, wave, exposed_now, px, py):
+def spawn_transition_hazards(boss, wave, exposed_now, px, py, bounds=None):
     hazards = []
 
     if exposed_now:
@@ -472,7 +541,7 @@ def spawn_transition_hazards(boss, wave, exposed_now, px, py):
                 "radius": 0.75,
             }
         )
-        mx, my = random_open_position(1.3, px, py)
+        mx, my = random_open_position(1.3, px, py, bounds)
         hazards.append(
             {
                 "kind": "rake_mine",
@@ -581,7 +650,7 @@ def update_shots(shots, dt, px, py, hp, player_invuln):
     return kept, hp, player_invuln
 
 
-def update_veggies(veggies, px, py, dt, wave):
+def update_veggies(veggies, px, py, dt, wave, room_bounds=None):
     spawned_shots = []
     spawned_hazards = []
     wave_speed_scale = 1.0 + min(0.45, wave * 0.04)
@@ -602,7 +671,7 @@ def update_veggies(veggies, px, py, dt, wave):
             if v["phase_timer"] <= 0:
                 v["exposed"] = not v.get("exposed", True)
                 v["phase_timer"] = 3.6 if v["exposed"] else 2.4
-                spawned_hazards.extend(spawn_transition_hazards(v, wave, v["exposed"], px, py))
+                spawned_hazards.extend(spawn_transition_hazards(v, wave, v["exposed"], px, py, room_bounds))
 
             if dist > 0.001:
                 nx, ny = dx / dist, dy / dist
@@ -772,9 +841,10 @@ def draw_health_bar(screen, hp):
     pygame.draw.rect(screen, (220, 50, 50), (x, y, fill, h))
 
 
-def draw_hud(screen, font, score, combo, lasso_state, hp, round_state, wave, rope_boost_timer, boss_status=None):
+def draw_hud(screen, font, score, combo, lasso_state, hp, round_state, wave, rope_boost_timer, boss_status=None, room_name="", keys=0):
     boost = f" BOOST {rope_boost_timer:0.1f}s" if rope_boost_timer > 0 else ""
-    text = f"WAVE {wave:02d}   SCORE {score:05d}   COMBO x{combo}   HP {hp:03d}   LASSO: {lasso_state.upper()}{boost}"
+    room = f" ROOM:{room_name}" if room_name else ""
+    text = f"WAVE {wave:02d}   KEYS {keys}   SCORE {score:05d}   COMBO x{combo}   HP {hp:03d}   LASSO: {lasso_state.upper()}{boost}{room}"
     surf = font.render(text, True, (250, 250, 250))
     shadow = font.render(text, True, (20, 20, 20))
     screen.blit(shadow, (18, HEIGHT - 38))
@@ -801,16 +871,22 @@ def draw_hud(screen, font, score, combo, lasso_state, hp, round_state, wave, rop
 def reset_round():
     px, py, angle = PLAYER_START
     start_wave = 1
+    room_index = 0
+    room_bounds = ROOMS[room_index]["bounds"]
+    sync_gate_locks(0)
     return {
         "px": px,
         "py": py,
         "angle": angle,
         "wave": start_wave,
+        "room_index": room_index,
+        "room_wave": 1,
+        "keys": 0,
         "wave_spawn_timer": 0.0,
-        "veggies": spawn_veggies(start_wave, px, py),
+        "veggies": spawn_veggies(start_wave, px, py, room_bounds),
         "shots": [],
         "hazards": [],
-        "pickups": spawn_wave_pickups(start_wave, px, py),
+        "pickups": spawn_wave_pickups(start_wave, px, py, room_bounds),
         "lasso_state": "idle",
         "lasso_target": None,
         "lasso_timer": 0.0,
@@ -857,6 +933,9 @@ def main():
 
         state["player_invuln"] = max(0.0, state["player_invuln"] - dt)
         state["rope_boost_timer"] = max(0.0, state["rope_boost_timer"] - dt)
+        sync_gate_locks(state.get("keys", 0))
+        current_room = ROOMS[state.get("room_index", 0)]
+        room_bounds = current_room["bounds"]
 
         if state["round_state"] == "alive":
             move_speed = 3.1 * dt
@@ -889,7 +968,7 @@ def main():
             if not is_wall(state["px"], next_y):
                 state["py"] = next_y
 
-            new_shots, new_hazards = update_veggies(state["veggies"], state["px"], state["py"], dt, state["wave"])
+            new_shots, new_hazards = update_veggies(state["veggies"], state["px"], state["py"], dt, state["wave"], room_bounds)
             if new_shots:
                 state["shots"].extend(new_shots)
                 audio.play("spit")
@@ -910,9 +989,24 @@ def main():
             if state["hp"] < hp_before_haz or hazard_hit:
                 audio.play("player_hit")
 
-            state["pickups"], state["hp"], state["rope_boost_timer"], picked_any = update_pickups(
+            state["pickups"], state["hp"], state["rope_boost_timer"], picked_any, keys_found = update_pickups(
                 state["pickups"], dt, state["px"], state["py"], state["hp"], state["rope_boost_timer"]
             )
+            if keys_found > 0:
+                state["keys"] = min(len(GATE_SEGMENTS), state.get("keys", 0) + keys_found)
+                new_room_index = min(len(ROOMS) - 1, state["room_index"] + keys_found)
+                if new_room_index != state["room_index"]:
+                    state["room_index"] = new_room_index
+                    sx, sy, sa = ROOMS[state["room_index"]]["spawn"]
+                    state["px"], state["py"], state["angle"] = sx, sy, sa
+                    state["room_wave"] = 1
+                    state["wave"] += 1
+                    nr_bounds = ROOMS[state["room_index"]]["bounds"]
+                    state["veggies"] = spawn_veggies(state["wave"], state["px"], state["py"], nr_bounds)
+                    state["shots"] = []
+                    state["hazards"] = []
+                    state["pickups"].extend(spawn_wave_pickups(state["wave"], state["px"], state["py"], nr_bounds))
+                    state["wave_spawn_timer"] = 0.0
             if picked_any:
                 audio.play("pickup")
 
@@ -1042,11 +1136,25 @@ def main():
                 else:
                     state["wave_spawn_timer"] -= dt
                     if state["wave_spawn_timer"] <= 0:
-                        state["wave"] += 1
-                        state["veggies"] = spawn_veggies(state["wave"], state["px"], state["py"])
-                        state["hazards"] = []
-                        state["pickups"].extend(spawn_wave_pickups(state["wave"], state["px"], state["py"]))
-                        state["wave_spawn_timer"] = 0.0
+                        last_room = len(ROOMS) - 1
+                        in_final_room = state["room_index"] >= last_room
+
+                        has_gate_key_drop = any(p.get("kind") == "gate_key" for p in state["pickups"])
+                        if (
+                            not in_final_room
+                            and state.get("room_wave", 1) >= ROOM_WAVES_REQUIRED
+                            and not has_gate_key_drop
+                        ):
+                            kx, ky = random_open_position(1.4, state["px"], state["py"], room_bounds)
+                            state["pickups"].append({"kind": "gate_key", "x": kx, "y": ky, "ttl": 90.0})
+                            state["wave_spawn_timer"] = 0.0
+                        else:
+                            state["wave"] += 1
+                            state["room_wave"] = state.get("room_wave", 1) + 1
+                            state["veggies"] = spawn_veggies(state["wave"], state["px"], state["py"], room_bounds)
+                            state["hazards"] = []
+                            state["pickups"].extend(spawn_wave_pickups(state["wave"], state["px"], state["py"], room_bounds))
+                            state["wave_spawn_timer"] = 0.0
 
         else:
             prev_space = keys[pygame.K_SPACE]
@@ -1055,6 +1163,7 @@ def main():
         cast_rays(screen, state["px"], state["py"], state["angle"])
         draw_veggies(screen, state["px"], state["py"], state["angle"], state["veggies"])
         draw_pickups(screen, state["px"], state["py"], state["angle"], state["pickups"])
+        draw_gates(screen, state["px"], state["py"], state["angle"])
         draw_hazards(screen, state["px"], state["py"], state["angle"], state["hazards"])
         draw_projectiles(screen, state["px"], state["py"], state["angle"], state["shots"])
         draw_minimap(screen, state["px"], state["py"], state["veggies"], state["shots"], state["pickups"], state["hazards"])
@@ -1086,11 +1195,16 @@ def main():
             state["wave"],
             state["rope_boost_timer"],
             boss_status,
+            current_room["name"],
+            state.get("keys", 0),
         )
 
         if state["wave_spawn_timer"] > 0:
             nxt = font.render(f"NEXT WAVE IN {state['wave_spawn_timer']:.1f}s", True, (255, 220, 120))
             screen.blit(nxt, (WIDTH // 2 - 130, 24))
+        elif any(p.get("kind") == "gate_key" for p in state["pickups"]):
+            gate_msg = font.render("GATE KEY DROPPED - GRAB IT TO UNLOCK NEXT ROOM", True, (255, 230, 120))
+            screen.blit(gate_msg, (WIDTH // 2 - 270, 24))
 
         pygame.display.flip()
 

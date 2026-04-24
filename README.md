@@ -41,6 +41,8 @@ python -m sillyveggiesremix.main
 - Carrot enemies patrol/chase and melee attack when close
 - Spitter Squash ranged class fires goo projectiles from mid-range
 - Wave director scales enemy count/composition and projectile pressure over time
+- Multi-room progression is live (Pallet Yard -> Tractor Bay -> Tool Depot)
+- Gate-key loop: clear room waves, collect dropped key, unlock next gate
 - Pickups spawn per wave: health canisters and rope-boost canisters
 - Boss Turnip appears every 5th wave with lasso-only weak-point phases (exposed vs armored)
 - Boss arena pressure patterns: radial burst phase + focused triple-shot phase
@@ -68,4 +70,5 @@ python -m sillyveggiesremix.main
 - [x] Add pickup economy (health + rope boost)
 - [x] Add boss veggie encounter
 - [x] Add boss-specific environment hazards/traps
-- [ ] Add multi-room map progression and gate keys
+- [x] Add multi-room map progression and gate keys
+- [ ] Add save/load run state and seedable runs
