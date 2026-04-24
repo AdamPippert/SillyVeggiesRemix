@@ -34,6 +34,13 @@ python -m sillyveggiesremix.main
 - Turn: Left/Right arrows
 - Fire lasso: tap Space
 - Reel target: hold Space when latched
+- Restart round (after win/death): R
+- Quit: Esc
+
+## Current gameplay status
+- Carrot enemies patrol/chase and melee attack when close
+- Player has HP with brief invulnerability frames after taking damage
+- Round states: alive -> win or dead -> restart loop
 
 ## Roadmap
 - [x] Repository scaffold
@@ -43,5 +50,6 @@ python -m sillyveggiesremix.main
 - [x] Rope projectile + latch logic
 - [x] Vegetable AI + capture states
 - [x] HUD, combos, timer, score
-- [ ] Add enemy attacks and player damage loop
+- [x] Add enemy attacks and player damage loop
+- [x] Add death/win round restart flow
 - [ ] Add audio + texture pass

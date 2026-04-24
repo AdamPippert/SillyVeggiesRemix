@@ -12,6 +12,9 @@ NUM_RAYS = 240
 MAX_DEPTH = 20
 SCALE = WIDTH // NUM_RAYS
 
+PLAYER_START = (2.5, 2.5, 0.0)
+MAX_HP = 100
+
 WORLD_MAP = [
     "################",
     "#......T.......#",
@@ -68,11 +71,7 @@ def cast_rays(screen, px, py, angle):
         wall_h = min(int(HEIGHT / (depth + 0.0001)), HEIGHT)
         shade = max(30, 255 - int(depth * 35))
         color = (shade // 2, shade // 2, shade // 3)
-        pygame.draw.rect(
-            screen,
-            color,
-            (ray * SCALE, HALF_H - wall_h // 2, SCALE + 1, wall_h),
-        )
+        pygame.draw.rect(screen, color, (ray * SCALE, HALF_H - wall_h // 2, SCALE + 1, wall_h))
 
 
 def project_sprite(px, py, angle, sx, sy):
@@ -93,6 +92,44 @@ def project_sprite(px, py, angle, sx, sy):
     return screen_x, screen_y, size, dist
 
 
+def spawn_veggies():
+    return [
+        {
+            "kind": "carrot",
+            "x": 11.5,
+            "y": 3.5,
+            "vx": 1.0,
+            "vy": 0.0,
+            "wander_t": 1.0,
+            "captured": False,
+            "latched": False,
+            "attack_cd": 0.6,
+        },
+        {
+            "kind": "carrot",
+            "x": 12.5,
+            "y": 8.5,
+            "vx": -1.0,
+            "vy": 0.0,
+            "wander_t": 1.5,
+            "captured": False,
+            "latched": False,
+            "attack_cd": 0.8,
+        },
+        {
+            "kind": "carrot",
+            "x": 8.5,
+            "y": 6.5,
+            "vx": 0.0,
+            "vy": 1.0,
+            "wander_t": 1.2,
+            "captured": False,
+            "latched": False,
+            "attack_cd": 1.0,
+        },
+    ]
+
+
 def draw_veggies(screen, px, py, angle, veggies):
     projected = []
     for idx, v in enumerate(veggies):
@@ -111,6 +148,10 @@ def draw_veggies(screen, px, py, angle, veggies):
         body = pygame.Rect(screen_x - size // 2, screen_y - size // 2, size, size)
         pygame.draw.rect(screen, col, body)
         pygame.draw.rect(screen, (35, 35, 35), body, 2)
+
+        if v["attack_cd"] < 0.15:
+            blink = pygame.Rect(screen_x - size // 4, screen_y - size // 2 - 6, size // 2, 4)
+            pygame.draw.rect(screen, (255, 50, 50), blink)
 
 
 def draw_minimap(screen, px, py, veggies):
@@ -138,6 +179,7 @@ def update_veggies(veggies, px, py, dt):
         if v["captured"]:
             continue
         if v["latched"]:
+            v["attack_cd"] = max(0.0, v["attack_cd"] - dt)
             continue
 
         dx = px - v["x"]
@@ -145,14 +187,12 @@ def update_veggies(veggies, px, py, dt):
         dist = math.hypot(dx, dy)
 
         if dist < 4.5 and has_line_of_sight(v["x"], v["y"], px, py):
-            # chase mode
             speed = 1.0
             if dist > 0.001:
                 nx, ny = dx / dist, dy / dist
             else:
                 nx, ny = 0.0, 0.0
         else:
-            # patrol mode
             v["wander_t"] -= dt
             if v["wander_t"] <= 0:
                 a = random.random() * math.tau
@@ -171,6 +211,32 @@ def update_veggies(veggies, px, py, dt):
             v["y"] = ny_pos
         else:
             v["vy"] *= -1
+
+        v["attack_cd"] = max(0.0, v["attack_cd"] - dt)
+
+
+def apply_enemy_attacks(veggies, px, py, hp, player_invuln):
+    if player_invuln > 0:
+        return hp, player_invuln, False
+
+    took_hit = False
+    for v in veggies:
+        if v["captured"] or v["latched"]:
+            continue
+        if v["attack_cd"] > 0:
+            continue
+
+        dx = px - v["x"]
+        dy = py - v["y"]
+        dist = math.hypot(dx, dy)
+        if dist < 1.35 and has_line_of_sight(v["x"], v["y"], px, py):
+            hp -= 12
+            player_invuln = 0.65
+            v["attack_cd"] = 0.9
+            took_hit = True
+            break
+
+    return max(0, hp), player_invuln, took_hit
 
 
 def select_lasso_target(px, py, angle, veggies, max_dist=6.0, cone=0.16):
@@ -196,12 +262,49 @@ def select_lasso_target(px, py, angle, veggies, max_dist=6.0, cone=0.16):
     return best_idx, best_dist
 
 
-def draw_hud(screen, font, score, combo, lasso_state):
-    text = f"SCORE {score:05d}   COMBO x{combo}   LASSO: {lasso_state.upper()}"
+def draw_health_bar(screen, hp):
+    x, y, w, h = 16, HEIGHT - 74, 320, 20
+    pygame.draw.rect(screen, (35, 35, 35), (x - 2, y - 2, w + 4, h + 4))
+    pygame.draw.rect(screen, (70, 18, 18), (x, y, w, h))
+    fill = int((max(0, hp) / MAX_HP) * w)
+    pygame.draw.rect(screen, (220, 50, 50), (x, y, fill, h))
+
+
+def draw_hud(screen, font, score, combo, lasso_state, hp, round_state):
+    text = f"SCORE {score:05d}   COMBO x{combo}   HP {hp:03d}   LASSO: {lasso_state.upper()}"
     surf = font.render(text, True, (250, 250, 250))
     shadow = font.render(text, True, (20, 20, 20))
     screen.blit(shadow, (18, HEIGHT - 38))
     screen.blit(surf, (16, HEIGHT - 40))
+    draw_health_bar(screen, hp)
+
+    if round_state == "win":
+        msg = "ALL VEGGIES CAPTURED - PRESS R TO RESTART OR ESC TO QUIT"
+        banner = font.render(msg, True, (255, 255, 120))
+        screen.blit(banner, (WIDTH // 2 - 360, 24))
+    elif round_state == "dead":
+        msg = "YOU GOT MULCHED - PRESS R TO RESTART OR ESC TO QUIT"
+        banner = font.render(msg, True, (255, 120, 120))
+        screen.blit(banner, (WIDTH // 2 - 320, 24))
+
+
+def reset_round():
+    px, py, angle = PLAYER_START
+    return {
+        "px": px,
+        "py": py,
+        "angle": angle,
+        "veggies": spawn_veggies(),
+        "lasso_state": "idle",
+        "lasso_target": None,
+        "lasso_timer": 0.0,
+        "break_timer": 0.0,
+        "combo": 1,
+        "combo_timer": 0.0,
+        "hp": MAX_HP,
+        "player_invuln": 0.0,
+        "round_state": "alive",
+    }
 
 
 def main():
@@ -211,24 +314,9 @@ def main():
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("consolas", 24)
 
-    px, py = 2.5, 2.5
-    angle = 0.0
-
-    veggies = [
-        {"kind": "carrot", "x": 11.5, "y": 3.5, "vx": 1.0, "vy": 0.0, "wander_t": 1.0, "captured": False, "latched": False},
-        {"kind": "carrot", "x": 12.5, "y": 8.5, "vx": -1.0, "vy": 0.0, "wander_t": 1.5, "captured": False, "latched": False},
-        {"kind": "carrot", "x": 8.5, "y": 6.5, "vx": 0.0, "vy": 1.0, "wander_t": 1.2, "captured": False, "latched": False},
-    ]
-
-    lasso_state = "idle"
-    lasso_target = None
-    lasso_timer = 0.0
-    break_timer = 0.0
-
+    state = reset_round()
     score = 0
-    combo = 1
     combo_window = 2.0
-    combo_timer = 0.0
     prev_space = False
 
     while True:
@@ -239,132 +327,159 @@ def main():
                 sys.exit(0)
 
         keys = pygame.key.get_pressed()
-        move_speed = 3.1 * dt
-        rot_speed = 1.85 * dt
 
-        if keys[pygame.K_LEFT]:
-            angle -= rot_speed
-        if keys[pygame.K_RIGHT]:
-            angle += rot_speed
+        if keys[pygame.K_ESCAPE]:
+            pygame.quit()
+            sys.exit(0)
 
-        dx = math.cos(angle)
-        dy = math.sin(angle)
+        if keys[pygame.K_r] and state["round_state"] in ("dead", "win"):
+            state = reset_round()
 
-        next_x, next_y = px, py
-        if keys[pygame.K_w]:
-            next_x += dx * move_speed
-            next_y += dy * move_speed
-        if keys[pygame.K_s]:
-            next_x -= dx * move_speed
-            next_y -= dy * move_speed
-        if keys[pygame.K_a]:
-            next_x += dy * move_speed
-            next_y -= dx * move_speed
-        if keys[pygame.K_d]:
-            next_x -= dy * move_speed
-            next_y += dx * move_speed
+        state["player_invuln"] = max(0.0, state["player_invuln"] - dt)
 
-        if not is_wall(next_x, py):
-            px = next_x
-        if not is_wall(px, next_y):
-            py = next_y
+        if state["round_state"] == "alive":
+            move_speed = 3.1 * dt
+            rot_speed = 1.85 * dt
 
-        update_veggies(veggies, px, py, dt)
+            if keys[pygame.K_LEFT]:
+                state["angle"] -= rot_speed
+            if keys[pygame.K_RIGHT]:
+                state["angle"] += rot_speed
 
-        combo_timer -= dt
-        if combo_timer <= 0:
-            combo = 1
+            dx = math.cos(state["angle"])
+            dy = math.sin(state["angle"])
 
-        if break_timer > 0:
-            break_timer -= dt
+            next_x, next_y = state["px"], state["py"]
+            if keys[pygame.K_w]:
+                next_x += dx * move_speed
+                next_y += dy * move_speed
+            if keys[pygame.K_s]:
+                next_x -= dx * move_speed
+                next_y -= dy * move_speed
+            if keys[pygame.K_a]:
+                next_x += dy * move_speed
+                next_y -= dx * move_speed
+            if keys[pygame.K_d]:
+                next_x -= dy * move_speed
+                next_y += dx * move_speed
 
-        space_down = keys[pygame.K_SPACE]
-        pressed = space_down and not prev_space
-        prev_space = space_down
+            if not is_wall(next_x, state["py"]):
+                state["px"] = next_x
+            if not is_wall(state["px"], next_y):
+                state["py"] = next_y
 
-        # Lasso state machine
-        if lasso_state == "idle" and pressed and break_timer <= 0:
-            lasso_state = "fired"
-            lasso_timer = 0.12
-            target_idx, _ = select_lasso_target(px, py, angle, veggies)
-            if target_idx is not None:
-                lasso_target = target_idx
-                veggies[target_idx]["latched"] = True
-                lasso_state = "latched"
+            update_veggies(state["veggies"], state["px"], state["py"], dt)
 
-        elif lasso_state == "fired":
-            lasso_timer -= dt
-            if lasso_timer <= 0:
-                lasso_state = "idle"
+            state["combo_timer"] -= dt
+            if state["combo_timer"] <= 0:
+                state["combo"] = 1
 
-        elif lasso_state in ("latched", "reeling"):
-            if lasso_target is None or lasso_target >= len(veggies) or veggies[lasso_target]["captured"]:
-                lasso_state = "idle"
-                lasso_target = None
-            else:
-                target = veggies[lasso_target]
-                tx, ty = target["x"], target["y"]
-                tdx, tdy = tx - px, ty - py
-                dist = math.hypot(tdx, tdy)
+            if state["break_timer"] > 0:
+                state["break_timer"] -= dt
 
-                if dist > 7.0 or not has_line_of_sight(px, py, tx, ty):
-                    target["latched"] = False
-                    lasso_state = "idle"
-                    lasso_target = None
-                    break_timer = 0.35
+            state["hp"], state["player_invuln"], _ = apply_enemy_attacks(
+                state["veggies"], state["px"], state["py"], state["hp"], state["player_invuln"]
+            )
+            if state["hp"] <= 0:
+                state["round_state"] = "dead"
+                if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):
+                    state["veggies"][state["lasso_target"]]["latched"] = False
+                state["lasso_state"] = "idle"
+                state["lasso_target"] = None
+
+            space_down = keys[pygame.K_SPACE]
+            pressed = space_down and not prev_space
+            prev_space = space_down
+
+            if state["lasso_state"] == "idle" and pressed and state["break_timer"] <= 0:
+                state["lasso_state"] = "fired"
+                state["lasso_timer"] = 0.12
+                target_idx, _ = select_lasso_target(state["px"], state["py"], state["angle"], state["veggies"])
+                if target_idx is not None:
+                    state["lasso_target"] = target_idx
+                    state["veggies"][target_idx]["latched"] = True
+                    state["lasso_state"] = "latched"
+
+            elif state["lasso_state"] == "fired":
+                state["lasso_timer"] -= dt
+                if state["lasso_timer"] <= 0:
+                    state["lasso_state"] = "idle"
+
+            elif state["lasso_state"] in ("latched", "reeling"):
+                if (
+                    state["lasso_target"] is None
+                    or state["lasso_target"] >= len(state["veggies"])
+                    or state["veggies"][state["lasso_target"]]["captured"]
+                ):
+                    state["lasso_state"] = "idle"
+                    state["lasso_target"] = None
                 else:
-                    if space_down:
-                        lasso_state = "reeling"
-                        if dist > 0.001:
-                            pull = min(2.6 * dt, dist)
-                            nx, ny = tdx / dist, tdy / dist
-                            nx_pos = target["x"] - nx * pull
-                            ny_pos = target["y"] - ny * pull
-                            if not is_wall(nx_pos, ny_pos):
-                                target["x"] = nx_pos
-                                target["y"] = ny_pos
+                    target = state["veggies"][state["lasso_target"]]
+                    tx, ty = target["x"], target["y"]
+                    tdx, tdy = tx - state["px"], ty - state["py"]
+                    dist = math.hypot(tdx, tdy)
 
-                        if dist < 1.15:
-                            target["captured"] = True
-                            target["latched"] = False
-                            lasso_target = None
-                            lasso_state = "idle"
-
-                            if combo_timer > 0:
-                                combo += 1
-                            else:
-                                combo = 1
-                            combo_timer = combo_window
-                            score += 100 * combo
+                    if dist > 7.0 or not has_line_of_sight(state["px"], state["py"], tx, ty):
+                        target["latched"] = False
+                        state["lasso_state"] = "idle"
+                        state["lasso_target"] = None
+                        state["break_timer"] = 0.35
                     else:
-                        lasso_state = "latched"
+                        if space_down:
+                            state["lasso_state"] = "reeling"
+                            if dist > 0.001:
+                                pull = min(2.6 * dt, dist)
+                                nx, ny = tdx / dist, tdy / dist
+                                nx_pos = target["x"] - nx * pull
+                                ny_pos = target["y"] - ny * pull
+                                if not is_wall(nx_pos, ny_pos):
+                                    target["x"] = nx_pos
+                                    target["y"] = ny_pos
 
-        # Draw sky/floor
+                            if dist < 1.15:
+                                target["captured"] = True
+                                target["latched"] = False
+                                state["lasso_target"] = None
+                                state["lasso_state"] = "idle"
+
+                                if state["combo_timer"] > 0:
+                                    state["combo"] += 1
+                                else:
+                                    state["combo"] = 1
+                                state["combo_timer"] = combo_window
+                                score += 100 * state["combo"]
+                        else:
+                            state["lasso_state"] = "latched"
+
+            if all(v["captured"] for v in state["veggies"]):
+                state["round_state"] = "win"
+
+        else:
+            prev_space = keys[pygame.K_SPACE]
+
         screen.fill((80, 120, 170), (0, 0, WIDTH, HALF_H))
         screen.fill((95, 65, 40), (0, HALF_H, WIDTH, HALF_H))
 
-        cast_rays(screen, px, py, angle)
-        draw_veggies(screen, px, py, angle, veggies)
-        draw_minimap(screen, px, py, veggies)
+        cast_rays(screen, state["px"], state["py"], state["angle"])
+        draw_veggies(screen, state["px"], state["py"], state["angle"], state["veggies"])
+        draw_minimap(screen, state["px"], state["py"], state["veggies"])
 
-        # Draw lasso cable on screen if latched/reeling
-        if lasso_target is not None and lasso_target < len(veggies):
-            target = veggies[lasso_target]
+        if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):
+            target = state["veggies"][state["lasso_target"]]
             if not target["captured"]:
-                proj = project_sprite(px, py, angle, target["x"], target["y"])
+                proj = project_sprite(state["px"], state["py"], state["angle"], target["x"], target["y"])
                 if proj is not None:
                     tx, ty, _, _ = proj
                     pygame.draw.line(screen, (245, 240, 170), (WIDTH // 2, HEIGHT // 2), (tx, ty), 2)
 
-        pygame.draw.circle(screen, (255, 255, 255), (WIDTH // 2, HEIGHT // 2), 5, 1)
-        draw_hud(screen, font, score, combo, lasso_state)
+        if state["player_invuln"] > 0:
+            flash = 130 if int(state["player_invuln"] * 20) % 2 == 0 else 0
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((255, 40, 40, flash // 3))
+            screen.blit(overlay, (0, 0))
 
-        if all(v["captured"] for v in veggies):
-            win = font.render("ALL VEGGIES CAPTURED - PRESS ESC TO QUIT", True, (255, 255, 120))
-            screen.blit(win, (WIDTH // 2 - 280, 24))
-            if keys[pygame.K_ESCAPE]:
-                pygame.quit()
-                sys.exit(0)
+        pygame.draw.circle(screen, (255, 255, 255), (WIDTH // 2, HEIGHT // 2), 5, 1)
+        draw_hud(screen, font, score, state["combo"], state["lasso_state"], state["hp"], state["round_state"])
 
         pygame.display.flip()
 
