@@ -18,6 +18,7 @@ MAX_HP = 100
 ROPE_BASE_PULL = 2.6
 ROPE_BOOST_MULT = 1.75
 ROPE_BOOST_DURATION = 6.0
+BOSS_WAVE_INTERVAL = 5
 
 WORLD_MAP = [
     "################",
@@ -180,6 +181,45 @@ def project_sprite(px, py, angle, sx, sy):
 
 def spawn_veggies(wave: int, px: float, py: float):
     wave = max(1, wave)
+
+    # Boss cadence: every Nth wave
+    if wave % BOSS_WAVE_INTERVAL == 0:
+        bx, by = random_open_position(4.0, px, py)
+        boss = {
+            "kind": "boss",
+            "x": bx,
+            "y": by,
+            "vx": random.choice([-1.0, 1.0]),
+            "vy": random.choice([-1.0, 1.0]),
+            "wander_t": 1.0,
+            "captured": False,
+            "latched": False,
+            "attack_cd": 1.0,
+            "weakpoints": 3,
+            "exposed": True,
+            "phase_timer": 3.5,
+        }
+
+        support_count = min(4, 1 + wave // BOSS_WAVE_INTERVAL)
+        support = []
+        for i in range(support_count):
+            sx, sy = random_open_position(3.0, px, py)
+            kind = "spitter" if i % 2 == 0 else "carrot"
+            support.append(
+                {
+                    "kind": kind,
+                    "x": sx,
+                    "y": sy,
+                    "vx": random.choice([-1.0, 1.0]),
+                    "vy": random.choice([-1.0, 1.0]),
+                    "wander_t": random.uniform(0.8, 1.8),
+                    "captured": False,
+                    "latched": False,
+                    "attack_cd": random.uniform(0.4, 1.0),
+                }
+            )
+        return [boss, *support]
+
     total = min(10, 2 + wave)
     spitters = min(total - 1, max(1, wave // 2))
     carrots = total - spitters
@@ -237,9 +277,19 @@ def draw_veggies(screen, px, py, angle, veggies):
         if v["kind"] == "carrot":
             col = (235, 120, 40)
             accent = (255, 190, 90)
-        else:
+        elif v["kind"] == "spitter":
             col = (115, 170, 70)
             accent = (180, 230, 130)
+        else:
+            if v.get("exposed", False):
+                col = (165, 95, 205)
+                accent = (245, 190, 255)
+            else:
+                col = (95, 70, 130)
+                accent = (150, 130, 180)
+
+        if v["kind"] == "boss":
+            size = int(size * 1.6)
 
         body = pygame.Rect(screen_x - size // 2, screen_y - size // 2, size, size)
         pygame.draw.rect(screen, col, body)
@@ -247,6 +297,13 @@ def draw_veggies(screen, px, py, angle, veggies):
 
         cap = pygame.Rect(screen_x - size // 4, screen_y - size // 2 - 4, size // 2, 5)
         pygame.draw.rect(screen, accent, cap)
+
+        if v["kind"] == "boss":
+            pips = max(0, int(v.get("weakpoints", 0)))
+            for p in range(pips):
+                px = screen_x - (pips * 7) // 2 + p * 7
+                py = screen_y - size // 2 - 12
+                pygame.draw.circle(screen, (255, 220, 255), (px, py), 3)
 
         if v["attack_cd"] < 0.15:
             blink = pygame.Rect(screen_x - size // 4, screen_y - size // 2 - 10, size // 2, 4)
@@ -301,8 +358,14 @@ def draw_minimap(screen, px, py, veggies, shots, pickups):
     for v in veggies:
         if v["captured"]:
             continue
-        vc = (235, 120, 40) if v["kind"] == "carrot" else (120, 210, 80)
-        pygame.draw.circle(screen, vc, (ox + int(v["x"] * tile), oy + int(v["y"] * tile)), 3)
+        if v["kind"] == "carrot":
+            vc = (235, 120, 40)
+        elif v["kind"] == "spitter":
+            vc = (120, 210, 80)
+        else:
+            vc = (190, 120, 240)
+        rad = 4 if v["kind"] == "boss" else 3
+        pygame.draw.circle(screen, vc, (ox + int(v["x"] * tile), oy + int(v["y"] * tile)), rad)
 
     for s in shots:
         pygame.draw.circle(screen, (140, 255, 120), (ox + int(s["x"] * tile), oy + int(s["y"] * tile)), 2)
@@ -393,6 +456,62 @@ def update_veggies(veggies, px, py, dt, wave):
         dist = math.hypot(dx, dy)
         sees_player = has_line_of_sight(v["x"], v["y"], px, py)
 
+        if v["kind"] == "boss":
+            v["phase_timer"] = max(0.0, v.get("phase_timer", 0.0) - dt)
+            if v["phase_timer"] <= 0:
+                v["exposed"] = not v.get("exposed", True)
+                v["phase_timer"] = 3.6 if v["exposed"] else 2.4
+
+            if dist > 0.001:
+                nx, ny = dx / dist, dy / dist
+            else:
+                nx, ny = 0.0, 0.0
+
+            move_speed = 0.5 * wave_speed_scale
+            nx_pos = v["x"] + nx * move_speed * dt
+            ny_pos = v["y"] + ny * move_speed * dt
+            if not is_wall(nx_pos, v["y"]):
+                v["x"] = nx_pos
+            if not is_wall(v["x"], ny_pos):
+                v["y"] = ny_pos
+
+            v["attack_cd"] = max(0.0, v["attack_cd"] - dt)
+            if v["attack_cd"] <= 0 and sees_player:
+                if v.get("exposed", False):
+                    # Focused pressure: aimed triple shot
+                    spread = [-0.18, 0.0, 0.18]
+                    base_a = math.atan2(dy, dx)
+                    for off in spread:
+                        a = base_a + off
+                        spawned_shots.append(
+                            {
+                                "x": v["x"],
+                                "y": v["y"],
+                                "dx": math.cos(a),
+                                "dy": math.sin(a),
+                                "speed": 4.0 + min(2.2, wave * 0.16),
+                                "ttl": 2.4,
+                            }
+                        )
+                    v["attack_cd"] = 1.2
+                else:
+                    # Arena pressure pattern: radial burst
+                    rays = 10
+                    for i in range(rays):
+                        a = (math.tau * i) / rays
+                        spawned_shots.append(
+                            {
+                                "x": v["x"],
+                                "y": v["y"],
+                                "dx": math.cos(a),
+                                "dy": math.sin(a),
+                                "speed": 3.4 + min(1.5, wave * 0.12),
+                                "ttl": 2.0,
+                            }
+                        )
+                    v["attack_cd"] = 1.75
+            continue
+
         if dist < 4.5 and sees_player:
             speed = (1.0 if v["kind"] == "carrot" else 0.72) * wave_speed_scale
             if dist > 0.001:
@@ -445,7 +564,7 @@ def apply_enemy_melee(veggies, px, py, hp, player_invuln):
     for v in veggies:
         if v["captured"] or v["latched"]:
             continue
-        if v["kind"] != "carrot":
+        if v["kind"] not in ("carrot", "boss"):
             continue
         if v["attack_cd"] > 0:
             continue
@@ -453,10 +572,20 @@ def apply_enemy_melee(veggies, px, py, hp, player_invuln):
         dx = px - v["x"]
         dy = py - v["y"]
         dist = math.hypot(dx, dy)
-        if dist < 1.35 and has_line_of_sight(v["x"], v["y"], px, py):
-            hp -= 12
+
+        if v["kind"] == "boss":
+            hit_range = 1.9
+            dmg = 18
+            cooldown = 1.15
+        else:
+            hit_range = 1.35
+            dmg = 12
+            cooldown = 0.9
+
+        if dist < hit_range and has_line_of_sight(v["x"], v["y"], px, py):
+            hp -= dmg
             player_invuln = 0.65
-            v["attack_cd"] = 0.9
+            v["attack_cd"] = cooldown
             took_hit = True
             break
 
@@ -486,6 +615,13 @@ def select_lasso_target(px, py, angle, veggies, max_dist=6.0, cone=0.16):
     return best_idx, best_dist
 
 
+def get_boss_status(veggies):
+    for v in veggies:
+        if not v.get("captured", False) and v.get("kind") == "boss":
+            return v.get("weakpoints", 0), v.get("exposed", False)
+    return None
+
+
 def draw_health_bar(screen, hp):
     x, y, w, h = 16, HEIGHT - 74, 320, 20
     pygame.draw.rect(screen, (35, 35, 35), (x - 2, y - 2, w + 4, h + 4))
@@ -494,7 +630,7 @@ def draw_health_bar(screen, hp):
     pygame.draw.rect(screen, (220, 50, 50), (x, y, fill, h))
 
 
-def draw_hud(screen, font, score, combo, lasso_state, hp, round_state, wave, rope_boost_timer):
+def draw_hud(screen, font, score, combo, lasso_state, hp, round_state, wave, rope_boost_timer, boss_status=None):
     boost = f" BOOST {rope_boost_timer:0.1f}s" if rope_boost_timer > 0 else ""
     text = f"WAVE {wave:02d}   SCORE {score:05d}   COMBO x{combo}   HP {hp:03d}   LASSO: {lasso_state.upper()}{boost}"
     surf = font.render(text, True, (250, 250, 250))
@@ -502,6 +638,13 @@ def draw_hud(screen, font, score, combo, lasso_state, hp, round_state, wave, rop
     screen.blit(shadow, (18, HEIGHT - 38))
     screen.blit(surf, (16, HEIGHT - 40))
     draw_health_bar(screen, hp)
+
+    if boss_status is not None:
+        weakpoints, exposed = boss_status
+        phase = "EXPOSED" if exposed else "ARMORED"
+        boss_text = f"BOSS TURNIP  WEAKPOINTS:{weakpoints}  PHASE:{phase}"
+        boss_surf = font.render(boss_text, True, (240, 200, 255))
+        screen.blit(boss_surf, (16, 12))
 
     if round_state == "win":
         msg = "ALL VEGGIES CAPTURED - PRESS R TO RESTART OR ESC TO QUIT"
@@ -695,18 +838,49 @@ def main():
                                     target["y"] = ny_pos
 
                             if dist < 1.15:
-                                target["captured"] = True
-                                target["latched"] = False
-                                state["lasso_target"] = None
-                                state["lasso_state"] = "idle"
-                                audio.play("capture")
+                                if target["kind"] == "boss":
+                                    if target.get("exposed", False):
+                                        target["weakpoints"] = max(0, target.get("weakpoints", 1) - 1)
+                                        target["exposed"] = False
+                                        target["phase_timer"] = 2.2
+                                        state["lasso_target"] = None
+                                        state["lasso_state"] = "idle"
+                                        target["latched"] = False
+                                        audio.play("capture")
 
-                                if state["combo_timer"] > 0:
-                                    state["combo"] += 1
+                                        if target["weakpoints"] <= 0:
+                                            target["captured"] = True
+                                            if state["combo_timer"] > 0:
+                                                state["combo"] += 2
+                                            else:
+                                                state["combo"] = 2
+                                            score += 500 * state["combo"]
+                                        else:
+                                            if state["combo_timer"] > 0:
+                                                state["combo"] += 1
+                                            else:
+                                                state["combo"] = 1
+                                            score += 220 * state["combo"]
+                                        state["combo_timer"] = combo_window
+                                    else:
+                                        # Rope bounces off armor if phase is closed
+                                        target["latched"] = False
+                                        state["lasso_target"] = None
+                                        state["lasso_state"] = "idle"
+                                        state["break_timer"] = 0.25
                                 else:
-                                    state["combo"] = 1
-                                state["combo_timer"] = combo_window
-                                score += 100 * state["combo"]
+                                    target["captured"] = True
+                                    target["latched"] = False
+                                    state["lasso_target"] = None
+                                    state["lasso_state"] = "idle"
+                                    audio.play("capture")
+
+                                    if state["combo_timer"] > 0:
+                                        state["combo"] += 1
+                                    else:
+                                        state["combo"] = 1
+                                    state["combo_timer"] = combo_window
+                                    score += 100 * state["combo"]
                         else:
                             state["lasso_state"] = "latched"
 
@@ -746,6 +920,7 @@ def main():
             screen.blit(overlay, (0, 0))
 
         pygame.draw.circle(screen, (255, 255, 255), (WIDTH // 2, HEIGHT // 2), 5, 1)
+        boss_status = get_boss_status(state["veggies"])
         draw_hud(
             screen,
             font,
@@ -756,6 +931,7 @@ def main():
             state["round_state"],
             state["wave"],
             state["rope_boost_timer"],
+            boss_status,
         )
 
         if state["wave_spawn_timer"] > 0:

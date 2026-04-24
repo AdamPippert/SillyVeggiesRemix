@@ -42,6 +42,8 @@ python -m sillyveggiesremix.main
 - Spitter Squash ranged class fires goo projectiles from mid-range
 - Wave director scales enemy count/composition and projectile pressure over time
 - Pickups spawn per wave: health canisters and rope-boost canisters
+- Boss Turnip appears every 5th wave with lasso-only weak-point phases (exposed vs armored)
+- Boss arena pressure patterns: radial burst phase + focused triple-shot phase
 - Player has HP with brief invulnerability frames after taking damage
 - Procedural texture pass added (sky/floor gradients + wall striping)
 - Lightweight synthesized audio cues for fire/latch/capture/hit/spit/pickup
@@ -61,4 +63,5 @@ python -m sillyveggiesremix.main
 - [x] Add ranged veggie class (Spitter Squash)
 - [x] Add wave director (timed waves + scaling)
 - [x] Add pickup economy (health + rope boost)
-- [ ] Add boss veggie encounter
+- [x] Add boss veggie encounter
+- [ ] Add boss-specific environment hazards/traps
