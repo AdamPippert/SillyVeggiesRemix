@@ -1,7 +1,13 @@
+import argparse
+import base64
+import json
 import math
+import pickle
 import random
 import sys
+import time
 from array import array
+from pathlib import Path
 
 import pygame
 
@@ -45,6 +51,8 @@ GATE_SEGMENTS = [
     {"x": 10.5, "y1": 1.15, "y2": 9.85},
 ]
 CURRENT_GATE_LOCKS = [True, True]
+SAVE_VERSION = 1
+DEFAULT_SAVE_FILE = "run_save.json"
 
 
 class AudioBank:
@@ -900,7 +908,84 @@ def reset_round():
     }
 
 
+def parse_cli_args():
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--seed", type=str, default=None, help="Seed for deterministic run generation")
+    parser.add_argument("--save-file", type=str, default=DEFAULT_SAVE_FILE, help="Path for save/load file")
+    parser.add_argument("--load-file", type=str, default=None, help="Load this save file on startup")
+    parser.add_argument("--fixed-dt", type=float, default=0.0, help="Optional fixed dt for deterministic simulation testing")
+    return parser.parse_args()
+
+
+def normalize_seed(seed_text):
+    if seed_text is None:
+        return int(time.time() * 1000) % 1_000_000_000
+    try:
+        return int(seed_text)
+    except ValueError:
+        return int.from_bytes(seed_text.encode("utf-8"), "little") % 1_000_000_000
+
+
+def new_run(seed_text=None):
+    run_seed = normalize_seed(seed_text)
+    random.seed(run_seed)
+    state = reset_round()
+    return state, run_seed
+
+
+def save_run(path: Path, state: dict, score: int, prev_space: bool, run_seed: int):
+    payload = {
+        "version": SAVE_VERSION,
+        "game": "sillyveggiesremix",
+        "seed": run_seed,
+        "saved_at": int(time.time()),
+        "score": score,
+        "prev_space": prev_space,
+        "state": state,
+        "rng_state_b64": base64.b64encode(pickle.dumps(random.getstate())).decode("ascii"),
+    }
+
+    path = path.expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, separators=(",", ":")))
+    tmp.replace(path)
+
+
+def load_run(path: Path):
+    path = path.expanduser()
+    payload = json.loads(path.read_text())
+
+    if payload.get("version") != SAVE_VERSION:
+        raise ValueError(f"Unsupported save version: {payload.get('version')}")
+
+    state = payload["state"]
+    score = int(payload.get("score", 0))
+    prev_space = bool(payload.get("prev_space", False))
+    run_seed = int(payload.get("seed", 0))
+
+    lasso_target = state.get("lasso_target")
+    veggies = state.get("veggies", [])
+    if lasso_target is not None and (not isinstance(lasso_target, int) or lasso_target < 0 or lasso_target >= len(veggies)):
+        state["lasso_target"] = None
+        state["lasso_state"] = "idle"
+
+    rng_state_b64 = payload.get("rng_state_b64")
+    if rng_state_b64:
+        rng_state = pickle.loads(base64.b64decode(rng_state_b64.encode("ascii")))
+        random.setstate(rng_state)
+    else:
+        random.seed(run_seed)
+
+    sync_gate_locks(state.get("keys", 0))
+    return state, score, prev_space, run_seed
+
+
 def main():
+    args = parse_cli_args()
+    save_path = Path(args.save_file).expanduser()
+    fixed_dt = max(0.0, float(args.fixed_dt or 0.0))
+
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("SillyVeggiesRemix - prototype")
@@ -910,17 +995,41 @@ def main():
     audio = AudioBank()
     audio.init()
 
-    state = reset_round()
-    score = 0
     combo_window = 2.0
-    prev_space = False
+
+    if args.load_file:
+        try:
+            state, score, prev_space, run_seed = load_run(Path(args.load_file))
+            print(f"[load] startup restored {Path(args.load_file).expanduser()}")
+        except Exception as e:
+            print(f"[load] startup failed ({e}); starting new run")
+            state, run_seed = new_run(args.seed)
+            score = 0
+            prev_space = False
+    else:
+        state, run_seed = new_run(args.seed)
+        score = 0
+        prev_space = False
 
     while True:
-        dt = clock.tick(60) / 1000
+        dt = fixed_dt if fixed_dt > 0 else (clock.tick(60) / 1000)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit(0)
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_F5:
+                    try:
+                        save_run(save_path, state, score, prev_space, run_seed)
+                        print(f"[save] wrote {save_path}")
+                    except Exception as e:
+                        print(f"[save] failed: {e}")
+                elif event.key == pygame.K_F9:
+                    try:
+                        state, score, prev_space, run_seed = load_run(save_path)
+                        print(f"[load] restored {save_path}")
+                    except Exception as e:
+                        print(f"[load] failed: {e}")
 
         keys = pygame.key.get_pressed()
 
@@ -929,7 +1038,9 @@ def main():
             sys.exit(0)
 
         if keys[pygame.K_r] and state["round_state"] in ("dead", "win"):
-            state = reset_round()
+            state, run_seed = new_run(args.seed)
+            score = 0
+            prev_space = False
 
         state["player_invuln"] = max(0.0, state["player_invuln"] - dt)
         state["rope_boost_timer"] = max(0.0, state["rope_boost_timer"] - dt)

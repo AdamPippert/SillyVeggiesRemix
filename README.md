@@ -27,6 +27,10 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 python -m sillyveggiesremix.main
+# deterministic run seed
+python -m sillyveggiesremix.main --seed 1337
+# startup load from save file
+python -m sillyveggiesremix.main --load-file ./run_save.json
 ```
 
 ## Current prototype controls
@@ -34,6 +38,8 @@ python -m sillyveggiesremix.main
 - Turn: Left/Right arrows
 - Fire lasso: tap Space
 - Reel target: hold Space when latched
+- Save run: F5
+- Load run: F9
 - Restart round (after win/death): R
 - Quit: Esc
 
@@ -43,6 +49,7 @@ python -m sillyveggiesremix.main
 - Wave director scales enemy count/composition and projectile pressure over time
 - Multi-room progression is live (Pallet Yard -> Tractor Bay -> Tool Depot)
 - Gate-key loop: clear room waves, collect dropped key, unlock next gate
+- Seedable deterministic runs and on-demand save/load are now available
 - Pickups spawn per wave: health canisters and rope-boost canisters
 - Boss Turnip appears every 5th wave with lasso-only weak-point phases (exposed vs armored)
 - Boss arena pressure patterns: radial burst phase + focused triple-shot phase
@@ -71,4 +78,5 @@ python -m sillyveggiesremix.main
 - [x] Add boss veggie encounter
 - [x] Add boss-specific environment hazards/traps
 - [x] Add multi-room map progression and gate keys
-- [ ] Add save/load run state and seedable runs
+- [x] Add save/load run state and seedable runs
+- [ ] Add telemetry log export for balancing
