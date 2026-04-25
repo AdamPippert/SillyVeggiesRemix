@@ -53,6 +53,7 @@ GATE_SEGMENTS = [
 CURRENT_GATE_LOCKS = [True, True]
 SAVE_VERSION = 1
 DEFAULT_SAVE_FILE = "run_save.json"
+DEFAULT_TELEMETRY_FILE = "run_telemetry.jsonl"
 
 
 class AudioBank:
@@ -493,6 +494,7 @@ def update_pickups(pickups, dt, px, py, hp, rope_boost_timer):
     kept = []
     picked_any = False
     keys_found = 0
+    picked_kinds = {"health": 0, "rope": 0, "gate_key": 0}
 
     for p in pickups:
         ttl = p["ttl"] - dt
@@ -503,16 +505,19 @@ def update_pickups(pickups, dt, px, py, hp, rope_boost_timer):
             picked_any = True
             if p["kind"] == "health":
                 hp = min(MAX_HP, hp + 25)
+                picked_kinds["health"] += 1
             elif p["kind"] == "rope":
                 rope_boost_timer = max(rope_boost_timer, ROPE_BOOST_DURATION)
+                picked_kinds["rope"] += 1
             elif p["kind"] == "gate_key":
                 keys_found += 1
+                picked_kinds["gate_key"] += 1
             continue
 
         p["ttl"] = ttl
         kept.append(p)
 
-    return kept, hp, rope_boost_timer, picked_any, keys_found
+    return kept, hp, rope_boost_timer, picked_any, keys_found, picked_kinds
 
 
 def spawn_transition_hazards(boss, wave, exposed_now, px, py, bounds=None):
@@ -914,6 +919,8 @@ def parse_cli_args():
     parser.add_argument("--save-file", type=str, default=DEFAULT_SAVE_FILE, help="Path for save/load file")
     parser.add_argument("--load-file", type=str, default=None, help="Load this save file on startup")
     parser.add_argument("--fixed-dt", type=float, default=0.0, help="Optional fixed dt for deterministic simulation testing")
+    parser.add_argument("--telemetry-file", type=str, default=DEFAULT_TELEMETRY_FILE, help="JSONL file to append run telemetry")
+    parser.add_argument("--no-telemetry", action="store_true", help="Disable telemetry log writing")
     return parser.parse_args()
 
 
@@ -981,9 +988,75 @@ def load_run(path: Path):
     return state, score, prev_space, run_seed
 
 
+def init_run_metrics(run_seed: int, loaded_from=None):
+    return {
+        "run_id": f"run-{time.time_ns()}",
+        "seed": int(run_seed),
+        "loaded_from": loaded_from,
+        "started_at": int(time.time()),
+        "wave_max": 1,
+        "room_max": 0,
+        "score_max": 0,
+        "damage_taken": {},
+        "pickup_counts": {},
+        "boss_weakpoint_hits": 0,
+        "gate_keys_collected": 0,
+        "waves_cleared": 0,
+        "finalized": False,
+    }
+
+
+def telemetry_add_damage(metrics: dict, source: str, amount: int):
+    if amount <= 0:
+        return
+    bucket = metrics.setdefault("damage_taken", {})
+    bucket[source] = bucket.get(source, 0) + int(amount)
+
+
+def telemetry_add_pickup(metrics: dict, kind: str, count: int = 1):
+    if count <= 0:
+        return
+    bucket = metrics.setdefault("pickup_counts", {})
+    bucket[kind] = bucket.get(kind, 0) + int(count)
+
+
+def flush_run_metrics(path: Path, metrics: dict, outcome: str, state: dict, score: int):
+    if metrics.get("finalized"):
+        return
+
+    metrics["finalized"] = True
+    payload = {
+        "run_id": metrics.get("run_id"),
+        "seed": metrics.get("seed"),
+        "loaded_from": metrics.get("loaded_from"),
+        "started_at": metrics.get("started_at"),
+        "ended_at": int(time.time()),
+        "outcome": outcome,
+        "wave_end": int(state.get("wave", 0)),
+        "room_end": int(state.get("room_index", 0)),
+        "score_end": int(score),
+        "wave_max": int(metrics.get("wave_max", state.get("wave", 0))),
+        "room_max": int(metrics.get("room_max", state.get("room_index", 0))),
+        "score_max": int(metrics.get("score_max", score)),
+        "damage_taken": metrics.get("damage_taken", {}),
+        "pickup_counts": metrics.get("pickup_counts", {}),
+        "boss_weakpoint_hits": int(metrics.get("boss_weakpoint_hits", 0)),
+        "gate_keys_collected": int(metrics.get("gate_keys_collected", 0)),
+        "waves_cleared": int(metrics.get("waves_cleared", 0)),
+        "hp_end": int(state.get("hp", 0)),
+    }
+
+    path = path.expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, separators=(",", ":")) + "\n")
+
+
 def main():
     args = parse_cli_args()
     save_path = Path(args.save_file).expanduser()
+    telemetry_path = Path(args.telemetry_file).expanduser()
+    telemetry_enabled = not args.no_telemetry
     fixed_dt = max(0.0, float(args.fixed_dt or 0.0))
 
     pygame.init()
@@ -1000,21 +1073,26 @@ def main():
     if args.load_file:
         try:
             state, score, prev_space, run_seed = load_run(Path(args.load_file))
+            run_metrics = init_run_metrics(run_seed, loaded_from=str(Path(args.load_file).expanduser()))
             print(f"[load] startup restored {Path(args.load_file).expanduser()}")
         except Exception as e:
             print(f"[load] startup failed ({e}); starting new run")
             state, run_seed = new_run(args.seed)
             score = 0
             prev_space = False
+            run_metrics = init_run_metrics(run_seed)
     else:
         state, run_seed = new_run(args.seed)
         score = 0
         prev_space = False
+        run_metrics = init_run_metrics(run_seed)
 
     while True:
         dt = fixed_dt if fixed_dt > 0 else (clock.tick(60) / 1000)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                if telemetry_enabled:
+                    flush_run_metrics(telemetry_path, run_metrics, "quit", state, score)
                 pygame.quit()
                 sys.exit(0)
             if event.type == pygame.KEYDOWN:
@@ -1026,7 +1104,10 @@ def main():
                         print(f"[save] failed: {e}")
                 elif event.key == pygame.K_F9:
                     try:
+                        if telemetry_enabled:
+                            flush_run_metrics(telemetry_path, run_metrics, "manual_load", state, score)
                         state, score, prev_space, run_seed = load_run(save_path)
+                        run_metrics = init_run_metrics(run_seed, loaded_from=str(save_path))
                         print(f"[load] restored {save_path}")
                     except Exception as e:
                         print(f"[load] failed: {e}")
@@ -1034,19 +1115,29 @@ def main():
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_ESCAPE]:
+            if telemetry_enabled:
+                flush_run_metrics(telemetry_path, run_metrics, "escape", state, score)
             pygame.quit()
             sys.exit(0)
 
         if keys[pygame.K_r] and state["round_state"] in ("dead", "win"):
+            if telemetry_enabled:
+                outcome = "restart_after_win" if state.get("round_state") == "win" else "restart_after_death"
+                flush_run_metrics(telemetry_path, run_metrics, outcome, state, score)
             state, run_seed = new_run(args.seed)
             score = 0
             prev_space = False
+            run_metrics = init_run_metrics(run_seed)
 
         state["player_invuln"] = max(0.0, state["player_invuln"] - dt)
         state["rope_boost_timer"] = max(0.0, state["rope_boost_timer"] - dt)
         sync_gate_locks(state.get("keys", 0))
         current_room = ROOMS[state.get("room_index", 0)]
         room_bounds = current_room["bounds"]
+
+        run_metrics["wave_max"] = max(int(run_metrics.get("wave_max", 1)), int(state.get("wave", 1)))
+        run_metrics["room_max"] = max(int(run_metrics.get("room_max", 0)), int(state.get("room_index", 0)))
+        run_metrics["score_max"] = max(int(run_metrics.get("score_max", 0)), int(score))
 
         if state["round_state"] == "alive":
             move_speed = 3.1 * dt
@@ -1090,20 +1181,28 @@ def main():
             state["shots"], state["hp"], state["player_invuln"] = update_shots(
                 state["shots"], dt, state["px"], state["py"], state["hp"], state["player_invuln"]
             )
-            if state["hp"] < hp_before_shots:
+            shot_damage = max(0, hp_before_shots - state["hp"])
+            if shot_damage > 0:
+                telemetry_add_damage(run_metrics, "spitter_projectile", shot_damage)
                 audio.play("player_hit")
 
             hp_before_haz = state["hp"]
             state["hazards"], state["hp"], state["player_invuln"], hazard_hit = update_hazards(
                 state["hazards"], dt, state["px"], state["py"], state["hp"], state["player_invuln"]
             )
-            if state["hp"] < hp_before_haz or hazard_hit:
+            hazard_damage = max(0, hp_before_haz - state["hp"])
+            if hazard_damage > 0 or hazard_hit:
+                if hazard_damage > 0:
+                    telemetry_add_damage(run_metrics, "environment_hazard", hazard_damage)
                 audio.play("player_hit")
 
-            state["pickups"], state["hp"], state["rope_boost_timer"], picked_any, keys_found = update_pickups(
+            state["pickups"], state["hp"], state["rope_boost_timer"], picked_any, keys_found, picked_kinds = update_pickups(
                 state["pickups"], dt, state["px"], state["py"], state["hp"], state["rope_boost_timer"]
             )
+            for pk, cnt in picked_kinds.items():
+                telemetry_add_pickup(run_metrics, pk, cnt)
             if keys_found > 0:
+                run_metrics["gate_keys_collected"] = int(run_metrics.get("gate_keys_collected", 0)) + keys_found
                 state["keys"] = min(len(GATE_SEGMENTS), state.get("keys", 0) + keys_found)
                 new_room_index = min(len(ROOMS) - 1, state["room_index"] + keys_found)
                 if new_room_index != state["room_index"]:
@@ -1129,14 +1228,22 @@ def main():
                 state["break_timer"] -= dt
 
             old_hp = state["hp"]
-            state["hp"], state["player_invuln"], melee_hit = apply_enemy_melee(
+            hp_after_melee, inv_after_melee, melee_hit = apply_enemy_melee(
                 state["veggies"], state["px"], state["py"], state["hp"], state["player_invuln"]
             )
+            melee_damage = max(0, old_hp - hp_after_melee)
+            state["hp"], state["player_invuln"] = hp_after_melee, inv_after_melee
             if state["hp"] < old_hp or melee_hit:
+                if melee_damage > 0:
+                    # Approximate source: prioritize boss melee when boss is near player
+                    boss_near = any(v.get("kind") == "boss" and not v.get("captured") and math.hypot(state["px"] - v.get("x", 0), state["py"] - v.get("y", 0)) < 2.2 for v in state["veggies"])
+                    telemetry_add_damage(run_metrics, "boss_melee" if boss_near else "carrot_melee", melee_damage)
                 audio.play("player_hit")
 
             if state["hp"] <= 0:
                 state["round_state"] = "dead"
+                if telemetry_enabled:
+                    flush_run_metrics(telemetry_path, run_metrics, "death", state, score)
                 if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):
                     state["veggies"][state["lasso_target"]]["latched"] = False
                 state["lasso_state"] = "idle"
@@ -1198,6 +1305,7 @@ def main():
                                 if target["kind"] == "boss":
                                     if target.get("exposed", False):
                                         target["weakpoints"] = max(0, target.get("weakpoints", 1) - 1)
+                                        run_metrics["boss_weakpoint_hits"] = int(run_metrics.get("boss_weakpoint_hits", 0)) + 1
                                         target["exposed"] = False
                                         target["phase_timer"] = 2.2
                                         state["lasso_target"] = None
@@ -1247,6 +1355,7 @@ def main():
                 else:
                     state["wave_spawn_timer"] -= dt
                     if state["wave_spawn_timer"] <= 0:
+                        run_metrics["waves_cleared"] = int(run_metrics.get("waves_cleared", 0)) + 1
                         last_room = len(ROOMS) - 1
                         in_final_room = state["room_index"] >= last_room
 

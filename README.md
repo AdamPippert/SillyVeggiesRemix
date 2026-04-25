@@ -31,6 +31,8 @@ python -m sillyveggiesremix.main
 python -m sillyveggiesremix.main --seed 1337
 # startup load from save file
 python -m sillyveggiesremix.main --load-file ./run_save.json
+# telemetry output (jsonl)
+python -m sillyveggiesremix.main --telemetry-file ./run_telemetry.jsonl
 ```
 
 ## Current prototype controls
@@ -50,6 +52,7 @@ python -m sillyveggiesremix.main --load-file ./run_save.json
 - Multi-room progression is live (Pallet Yard -> Tractor Bay -> Tool Depot)
 - Gate-key loop: clear room waves, collect dropped key, unlock next gate
 - Seedable deterministic runs and on-demand save/load are now available
+- Telemetry log export now records per-run balancing metrics (damage sources, pickups, waves, room reached)
 - Pickups spawn per wave: health canisters and rope-boost canisters
 - Boss Turnip appears every 5th wave with lasso-only weak-point phases (exposed vs armored)
 - Boss arena pressure patterns: radial burst phase + focused triple-shot phase
@@ -79,4 +82,5 @@ python -m sillyveggiesremix.main --load-file ./run_save.json
 - [x] Add boss-specific environment hazards/traps
 - [x] Add multi-room map progression and gate keys
 - [x] Add save/load run state and seedable runs
-- [ ] Add telemetry log export for balancing
+- [x] Add telemetry log export for balancing
+- [ ] Modularize single-file prototype into systems package
