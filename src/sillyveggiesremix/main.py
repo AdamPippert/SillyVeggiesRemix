@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pygame
 
+from .entities import AudioBank as EntityAudioBank
+from . import systems as game_systems
+
 WIDTH, HEIGHT = 1280, 720
 HALF_H = HEIGHT // 2
 FOV = math.pi / 3
@@ -896,10 +899,10 @@ def reset_round():
         "room_wave": 1,
         "keys": 0,
         "wave_spawn_timer": 0.0,
-        "veggies": spawn_veggies(start_wave, px, py, room_bounds),
+        "veggies": game_systems.spawn_veggies(start_wave, px, py, room_bounds),
         "shots": [],
         "hazards": [],
-        "pickups": spawn_wave_pickups(start_wave, px, py, room_bounds),
+        "pickups": game_systems.spawn_wave_pickups(start_wave, px, py, room_bounds),
         "lasso_state": "idle",
         "lasso_target": None,
         "lasso_timer": 0.0,
@@ -1065,8 +1068,15 @@ def main():
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("consolas", 24)
 
-    audio = AudioBank()
+    audio = EntityAudioBank()
     audio.init()
+
+    game_systems.configure(
+        is_wall,
+        has_line_of_sight,
+        random_open_position,
+        {"BOSS_WAVE_INTERVAL": BOSS_WAVE_INTERVAL, "ROPE_BOOST_DURATION": ROPE_BOOST_DURATION},
+    )
 
     combo_window = 2.0
 
@@ -1170,7 +1180,7 @@ def main():
             if not is_wall(state["px"], next_y):
                 state["py"] = next_y
 
-            new_shots, new_hazards = update_veggies(state["veggies"], state["px"], state["py"], dt, state["wave"], room_bounds)
+            new_shots, new_hazards = game_systems.update_veggies(state["veggies"], state["px"], state["py"], dt, state["wave"], room_bounds)
             if new_shots:
                 state["shots"].extend(new_shots)
                 audio.play("spit")
@@ -1178,7 +1188,7 @@ def main():
                 state["hazards"].extend(new_hazards)
 
             hp_before_shots = state["hp"]
-            state["shots"], state["hp"], state["player_invuln"] = update_shots(
+            state["shots"], state["hp"], state["player_invuln"] = game_systems.update_shots(
                 state["shots"], dt, state["px"], state["py"], state["hp"], state["player_invuln"]
             )
             shot_damage = max(0, hp_before_shots - state["hp"])
@@ -1187,7 +1197,7 @@ def main():
                 audio.play("player_hit")
 
             hp_before_haz = state["hp"]
-            state["hazards"], state["hp"], state["player_invuln"], hazard_hit = update_hazards(
+            state["hazards"], state["hp"], state["player_invuln"], hazard_hit = game_systems.update_hazards(
                 state["hazards"], dt, state["px"], state["py"], state["hp"], state["player_invuln"]
             )
             hazard_damage = max(0, hp_before_haz - state["hp"])
@@ -1196,7 +1206,7 @@ def main():
                     telemetry_add_damage(run_metrics, "environment_hazard", hazard_damage)
                 audio.play("player_hit")
 
-            state["pickups"], state["hp"], state["rope_boost_timer"], picked_any, keys_found, picked_kinds = update_pickups(
+            state["pickups"], state["hp"], state["rope_boost_timer"], picked_any, keys_found, picked_kinds = game_systems.update_pickups(
                 state["pickups"], dt, state["px"], state["py"], state["hp"], state["rope_boost_timer"]
             )
             for pk, cnt in picked_kinds.items():
@@ -1212,10 +1222,10 @@ def main():
                     state["room_wave"] = 1
                     state["wave"] += 1
                     nr_bounds = ROOMS[state["room_index"]]["bounds"]
-                    state["veggies"] = spawn_veggies(state["wave"], state["px"], state["py"], nr_bounds)
+                    state["veggies"] = game_systems.spawn_veggies(state["wave"], state["px"], state["py"], nr_bounds)
                     state["shots"] = []
                     state["hazards"] = []
-                    state["pickups"].extend(spawn_wave_pickups(state["wave"], state["px"], state["py"], nr_bounds))
+                    state["pickups"].extend(game_systems.spawn_wave_pickups(state["wave"], state["px"], state["py"], nr_bounds))
                     state["wave_spawn_timer"] = 0.0
             if picked_any:
                 audio.play("pickup")
@@ -1228,7 +1238,7 @@ def main():
                 state["break_timer"] -= dt
 
             old_hp = state["hp"]
-            hp_after_melee, inv_after_melee, melee_hit = apply_enemy_melee(
+            hp_after_melee, inv_after_melee, melee_hit = game_systems.apply_enemy_melee(
                 state["veggies"], state["px"], state["py"], state["hp"], state["player_invuln"]
             )
             melee_damage = max(0, old_hp - hp_after_melee)
@@ -1257,7 +1267,7 @@ def main():
                 state["lasso_state"] = "fired"
                 state["lasso_timer"] = 0.12
                 audio.play("lasso_fire")
-                target_idx, _ = select_lasso_target(state["px"], state["py"], state["angle"], state["veggies"])
+                target_idx, _ = game_systems.select_lasso_target(state["px"], state["py"], state["angle"], state["veggies"])
                 if target_idx is not None:
                     state["lasso_target"] = target_idx
                     state["veggies"][target_idx]["latched"] = True
@@ -1371,9 +1381,9 @@ def main():
                         else:
                             state["wave"] += 1
                             state["room_wave"] = state.get("room_wave", 1) + 1
-                            state["veggies"] = spawn_veggies(state["wave"], state["px"], state["py"], room_bounds)
+                            state["veggies"] = game_systems.spawn_veggies(state["wave"], state["px"], state["py"], room_bounds)
                             state["hazards"] = []
-                            state["pickups"].extend(spawn_wave_pickups(state["wave"], state["px"], state["py"], room_bounds))
+                            state["pickups"].extend(game_systems.spawn_wave_pickups(state["wave"], state["px"], state["py"], room_bounds))
                             state["wave_spawn_timer"] = 0.0
 
         else:
@@ -1403,7 +1413,7 @@ def main():
             screen.blit(overlay, (0, 0))
 
         pygame.draw.circle(screen, (255, 255, 255), (WIDTH // 2, HEIGHT // 2), 5, 1)
-        boss_status = get_boss_status(state["veggies"])
+        boss_status = game_systems.get_boss_status(state["veggies"])
         draw_hud(
             screen,
             font,

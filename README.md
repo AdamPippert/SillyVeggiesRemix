@@ -53,6 +53,7 @@ python -m sillyveggiesremix.main --telemetry-file ./run_telemetry.jsonl
 - Gate-key loop: clear room waves, collect dropped key, unlock next gate
 - Seedable deterministic runs and on-demand save/load are now available
 - Telemetry log export now records per-run balancing metrics (damage sources, pickups, waves, room reached)
+- Core logic now split into modules: `systems.py`, `entities.py`, and `content.py`
 - Pickups spawn per wave: health canisters and rope-boost canisters
 - Boss Turnip appears every 5th wave with lasso-only weak-point phases (exposed vs armored)
 - Boss arena pressure patterns: radial burst phase + focused triple-shot phase
@@ -83,4 +84,5 @@ python -m sillyveggiesremix.main --telemetry-file ./run_telemetry.jsonl
 - [x] Add multi-room map progression and gate keys
 - [x] Add save/load run state and seedable runs
 - [x] Add telemetry log export for balancing
-- [ ] Modularize single-file prototype into systems package
+- [x] Modularize single-file prototype into systems/entities/content modules
+- [ ] Split remaining rendering/runtime orchestration into dedicated modules
