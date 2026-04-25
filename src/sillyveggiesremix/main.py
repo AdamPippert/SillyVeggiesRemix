@@ -1,17 +1,12 @@
-import argparse
-import base64
-import json
 import math
-import pickle
 import random
 import sys
-import time
-from array import array
 from pathlib import Path
 
 import pygame
 
 from .entities import AudioBank as EntityAudioBank
+from . import runtime as game_runtime
 from . import systems as game_systems
 
 WIDTH, HEIGHT = 1280, 720
@@ -57,40 +52,6 @@ CURRENT_GATE_LOCKS = [True, True]
 SAVE_VERSION = 1
 DEFAULT_SAVE_FILE = "run_save.json"
 DEFAULT_TELEMETRY_FILE = "run_telemetry.jsonl"
-
-
-class AudioBank:
-    def __init__(self):
-        self.enabled = False
-        self.sounds = {}
-
-    def init(self):
-        try:
-            pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=512)
-            self.sounds["lasso_fire"] = self._tone(540, 45, 0.25)
-            self.sounds["lasso_latch"] = self._tone(760, 65, 0.2)
-            self.sounds["capture"] = self._tone(980, 95, 0.23)
-            self.sounds["player_hit"] = self._tone(170, 110, 0.3)
-            self.sounds["spit"] = self._tone(260, 60, 0.2)
-            self.sounds["pickup"] = self._tone(840, 70, 0.2)
-            self.enabled = True
-        except pygame.error:
-            self.enabled = False
-
-    def _tone(self, freq_hz: float, dur_ms: int, volume: float):
-        sample_rate = 22050
-        samples = int(sample_rate * dur_ms / 1000)
-        buf = array("h")
-        for i in range(samples):
-            t = i / sample_rate
-            env = 1.0 - (i / samples)
-            val = int(32767 * volume * env * math.sin(2 * math.pi * freq_hz * t))
-            buf.append(val)
-        return pygame.mixer.Sound(buffer=buf.tobytes())
-
-    def play(self, key: str):
-        if self.enabled and key in self.sounds:
-            self.sounds[key].play()
 
 
 def sync_gate_locks(unlocked_keys: int):
@@ -916,147 +877,8 @@ def reset_round():
     }
 
 
-def parse_cli_args():
-    parser = argparse.ArgumentParser(add_help=True)
-    parser.add_argument("--seed", type=str, default=None, help="Seed for deterministic run generation")
-    parser.add_argument("--save-file", type=str, default=DEFAULT_SAVE_FILE, help="Path for save/load file")
-    parser.add_argument("--load-file", type=str, default=None, help="Load this save file on startup")
-    parser.add_argument("--fixed-dt", type=float, default=0.0, help="Optional fixed dt for deterministic simulation testing")
-    parser.add_argument("--telemetry-file", type=str, default=DEFAULT_TELEMETRY_FILE, help="JSONL file to append run telemetry")
-    parser.add_argument("--no-telemetry", action="store_true", help="Disable telemetry log writing")
-    return parser.parse_args()
-
-
-def normalize_seed(seed_text):
-    if seed_text is None:
-        return int(time.time() * 1000) % 1_000_000_000
-    try:
-        return int(seed_text)
-    except ValueError:
-        return int.from_bytes(seed_text.encode("utf-8"), "little") % 1_000_000_000
-
-
-def new_run(seed_text=None):
-    run_seed = normalize_seed(seed_text)
-    random.seed(run_seed)
-    state = reset_round()
-    return state, run_seed
-
-
-def save_run(path: Path, state: dict, score: int, prev_space: bool, run_seed: int):
-    payload = {
-        "version": SAVE_VERSION,
-        "game": "sillyveggiesremix",
-        "seed": run_seed,
-        "saved_at": int(time.time()),
-        "score": score,
-        "prev_space": prev_space,
-        "state": state,
-        "rng_state_b64": base64.b64encode(pickle.dumps(random.getstate())).decode("ascii"),
-    }
-
-    path = path.expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, separators=(",", ":")))
-    tmp.replace(path)
-
-
-def load_run(path: Path):
-    path = path.expanduser()
-    payload = json.loads(path.read_text())
-
-    if payload.get("version") != SAVE_VERSION:
-        raise ValueError(f"Unsupported save version: {payload.get('version')}")
-
-    state = payload["state"]
-    score = int(payload.get("score", 0))
-    prev_space = bool(payload.get("prev_space", False))
-    run_seed = int(payload.get("seed", 0))
-
-    lasso_target = state.get("lasso_target")
-    veggies = state.get("veggies", [])
-    if lasso_target is not None and (not isinstance(lasso_target, int) or lasso_target < 0 or lasso_target >= len(veggies)):
-        state["lasso_target"] = None
-        state["lasso_state"] = "idle"
-
-    rng_state_b64 = payload.get("rng_state_b64")
-    if rng_state_b64:
-        rng_state = pickle.loads(base64.b64decode(rng_state_b64.encode("ascii")))
-        random.setstate(rng_state)
-    else:
-        random.seed(run_seed)
-
-    sync_gate_locks(state.get("keys", 0))
-    return state, score, prev_space, run_seed
-
-
-def init_run_metrics(run_seed: int, loaded_from=None):
-    return {
-        "run_id": f"run-{time.time_ns()}",
-        "seed": int(run_seed),
-        "loaded_from": loaded_from,
-        "started_at": int(time.time()),
-        "wave_max": 1,
-        "room_max": 0,
-        "score_max": 0,
-        "damage_taken": {},
-        "pickup_counts": {},
-        "boss_weakpoint_hits": 0,
-        "gate_keys_collected": 0,
-        "waves_cleared": 0,
-        "finalized": False,
-    }
-
-
-def telemetry_add_damage(metrics: dict, source: str, amount: int):
-    if amount <= 0:
-        return
-    bucket = metrics.setdefault("damage_taken", {})
-    bucket[source] = bucket.get(source, 0) + int(amount)
-
-
-def telemetry_add_pickup(metrics: dict, kind: str, count: int = 1):
-    if count <= 0:
-        return
-    bucket = metrics.setdefault("pickup_counts", {})
-    bucket[kind] = bucket.get(kind, 0) + int(count)
-
-
-def flush_run_metrics(path: Path, metrics: dict, outcome: str, state: dict, score: int):
-    if metrics.get("finalized"):
-        return
-
-    metrics["finalized"] = True
-    payload = {
-        "run_id": metrics.get("run_id"),
-        "seed": metrics.get("seed"),
-        "loaded_from": metrics.get("loaded_from"),
-        "started_at": metrics.get("started_at"),
-        "ended_at": int(time.time()),
-        "outcome": outcome,
-        "wave_end": int(state.get("wave", 0)),
-        "room_end": int(state.get("room_index", 0)),
-        "score_end": int(score),
-        "wave_max": int(metrics.get("wave_max", state.get("wave", 0))),
-        "room_max": int(metrics.get("room_max", state.get("room_index", 0))),
-        "score_max": int(metrics.get("score_max", score)),
-        "damage_taken": metrics.get("damage_taken", {}),
-        "pickup_counts": metrics.get("pickup_counts", {}),
-        "boss_weakpoint_hits": int(metrics.get("boss_weakpoint_hits", 0)),
-        "gate_keys_collected": int(metrics.get("gate_keys_collected", 0)),
-        "waves_cleared": int(metrics.get("waves_cleared", 0)),
-        "hp_end": int(state.get("hp", 0)),
-    }
-
-    path = path.expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, separators=(",", ":")) + "\n")
-
-
 def main():
-    args = parse_cli_args()
+    args = game_runtime.parse_cli_args(DEFAULT_SAVE_FILE, DEFAULT_TELEMETRY_FILE)
     save_path = Path(args.save_file).expanduser()
     telemetry_path = Path(args.telemetry_file).expanduser()
     telemetry_enabled = not args.no_telemetry
@@ -1082,42 +904,42 @@ def main():
 
     if args.load_file:
         try:
-            state, score, prev_space, run_seed = load_run(Path(args.load_file))
-            run_metrics = init_run_metrics(run_seed, loaded_from=str(Path(args.load_file).expanduser()))
+            state, score, prev_space, run_seed = game_runtime.load_run(Path(args.load_file), SAVE_VERSION, sync_gate_locks)
+            run_metrics = game_runtime.init_run_metrics(run_seed, loaded_from=str(Path(args.load_file).expanduser()))
             print(f"[load] startup restored {Path(args.load_file).expanduser()}")
         except Exception as e:
             print(f"[load] startup failed ({e}); starting new run")
-            state, run_seed = new_run(args.seed)
+            state, run_seed = game_runtime.new_run(reset_round, args.seed)
             score = 0
             prev_space = False
-            run_metrics = init_run_metrics(run_seed)
+            run_metrics = game_runtime.init_run_metrics(run_seed)
     else:
-        state, run_seed = new_run(args.seed)
+        state, run_seed = game_runtime.new_run(reset_round, args.seed)
         score = 0
         prev_space = False
-        run_metrics = init_run_metrics(run_seed)
+        run_metrics = game_runtime.init_run_metrics(run_seed)
 
     while True:
         dt = fixed_dt if fixed_dt > 0 else (clock.tick(60) / 1000)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 if telemetry_enabled:
-                    flush_run_metrics(telemetry_path, run_metrics, "quit", state, score)
+                    game_runtime.flush_run_metrics(telemetry_path, run_metrics, "quit", state, score)
                 pygame.quit()
                 sys.exit(0)
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_F5:
                     try:
-                        save_run(save_path, state, score, prev_space, run_seed)
+                        game_runtime.save_run(save_path, state, score, prev_space, run_seed, SAVE_VERSION)
                         print(f"[save] wrote {save_path}")
                     except Exception as e:
                         print(f"[save] failed: {e}")
                 elif event.key == pygame.K_F9:
                     try:
                         if telemetry_enabled:
-                            flush_run_metrics(telemetry_path, run_metrics, "manual_load", state, score)
-                        state, score, prev_space, run_seed = load_run(save_path)
-                        run_metrics = init_run_metrics(run_seed, loaded_from=str(save_path))
+                            game_runtime.flush_run_metrics(telemetry_path, run_metrics, "manual_load", state, score)
+                        state, score, prev_space, run_seed = game_runtime.load_run(save_path, SAVE_VERSION, sync_gate_locks)
+                        run_metrics = game_runtime.init_run_metrics(run_seed, loaded_from=str(save_path))
                         print(f"[load] restored {save_path}")
                     except Exception as e:
                         print(f"[load] failed: {e}")
@@ -1126,18 +948,18 @@ def main():
 
         if keys[pygame.K_ESCAPE]:
             if telemetry_enabled:
-                flush_run_metrics(telemetry_path, run_metrics, "escape", state, score)
+                game_runtime.flush_run_metrics(telemetry_path, run_metrics, "escape", state, score)
             pygame.quit()
             sys.exit(0)
 
         if keys[pygame.K_r] and state["round_state"] in ("dead", "win"):
             if telemetry_enabled:
                 outcome = "restart_after_win" if state.get("round_state") == "win" else "restart_after_death"
-                flush_run_metrics(telemetry_path, run_metrics, outcome, state, score)
-            state, run_seed = new_run(args.seed)
+                game_runtime.flush_run_metrics(telemetry_path, run_metrics, outcome, state, score)
+            state, run_seed = game_runtime.new_run(reset_round, args.seed)
             score = 0
             prev_space = False
-            run_metrics = init_run_metrics(run_seed)
+            run_metrics = game_runtime.init_run_metrics(run_seed)
 
         state["player_invuln"] = max(0.0, state["player_invuln"] - dt)
         state["rope_boost_timer"] = max(0.0, state["rope_boost_timer"] - dt)
@@ -1193,7 +1015,7 @@ def main():
             )
             shot_damage = max(0, hp_before_shots - state["hp"])
             if shot_damage > 0:
-                telemetry_add_damage(run_metrics, "spitter_projectile", shot_damage)
+                game_runtime.telemetry_add_damage(run_metrics, "spitter_projectile", shot_damage)
                 audio.play("player_hit")
 
             hp_before_haz = state["hp"]
@@ -1203,14 +1025,14 @@ def main():
             hazard_damage = max(0, hp_before_haz - state["hp"])
             if hazard_damage > 0 or hazard_hit:
                 if hazard_damage > 0:
-                    telemetry_add_damage(run_metrics, "environment_hazard", hazard_damage)
+                    game_runtime.telemetry_add_damage(run_metrics, "environment_hazard", hazard_damage)
                 audio.play("player_hit")
 
             state["pickups"], state["hp"], state["rope_boost_timer"], picked_any, keys_found, picked_kinds = game_systems.update_pickups(
                 state["pickups"], dt, state["px"], state["py"], state["hp"], state["rope_boost_timer"]
             )
             for pk, cnt in picked_kinds.items():
-                telemetry_add_pickup(run_metrics, pk, cnt)
+                game_runtime.telemetry_add_pickup(run_metrics, pk, cnt)
             if keys_found > 0:
                 run_metrics["gate_keys_collected"] = int(run_metrics.get("gate_keys_collected", 0)) + keys_found
                 state["keys"] = min(len(GATE_SEGMENTS), state.get("keys", 0) + keys_found)
@@ -1247,13 +1069,13 @@ def main():
                 if melee_damage > 0:
                     # Approximate source: prioritize boss melee when boss is near player
                     boss_near = any(v.get("kind") == "boss" and not v.get("captured") and math.hypot(state["px"] - v.get("x", 0), state["py"] - v.get("y", 0)) < 2.2 for v in state["veggies"])
-                    telemetry_add_damage(run_metrics, "boss_melee" if boss_near else "carrot_melee", melee_damage)
+                    game_runtime.telemetry_add_damage(run_metrics, "boss_melee" if boss_near else "carrot_melee", melee_damage)
                 audio.play("player_hit")
 
             if state["hp"] <= 0:
                 state["round_state"] = "dead"
                 if telemetry_enabled:
-                    flush_run_metrics(telemetry_path, run_metrics, "death", state, score)
+                    game_runtime.flush_run_metrics(telemetry_path, run_metrics, "death", state, score)
                 if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):
                     state["veggies"][state["lasso_target"]]["latched"] = False
                 state["lasso_state"] = "idle"
