@@ -284,3 +284,64 @@ def draw_hud(screen, font, score, combo, lasso_state, hp, round_state, wave, rop
         msg = "YOU GOT MULCHED - PRESS R TO RESTART OR ESC TO QUIT"
         banner = font.render(msg, True, (255, 120, 120))
         screen.blit(banner, (WIDTH // 2 - 320, 24))
+
+
+def present_frame(screen, font, state, score, room_name, world_map, gate_segments, gate_locks, is_wall_fn, boss_status):
+    draw_background(screen)
+    cast_rays(screen, state["px"], state["py"], state["angle"], is_wall_fn)
+    draw_veggies(screen, state["px"], state["py"], state["angle"], state["veggies"])
+    draw_pickups(screen, state["px"], state["py"], state["angle"], state["pickups"])
+    draw_gates(screen, state["px"], state["py"], state["angle"], gate_segments, gate_locks)
+    draw_hazards(screen, state["px"], state["py"], state["angle"], state["hazards"])
+    draw_projectiles(screen, state["px"], state["py"], state["angle"], state["shots"])
+    draw_minimap(
+        screen,
+        state["px"],
+        state["py"],
+        state["veggies"],
+        state["shots"],
+        state["pickups"],
+        state["hazards"],
+        world_map,
+        gate_segments,
+        gate_locks,
+    )
+
+    if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):
+        target = state["veggies"][state["lasso_target"]]
+        if not target["captured"]:
+            proj = project_sprite(state["px"], state["py"], state["angle"], target["x"], target["y"])
+            if proj is not None:
+                tx, ty, _, _ = proj
+                pygame.draw.line(screen, (245, 240, 170), (WIDTH // 2, HEIGHT // 2), (tx, ty), 2)
+
+    if state["player_invuln"] > 0:
+        flash = 130 if int(state["player_invuln"] * 20) % 2 == 0 else 0
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((255, 40, 40, flash // 3))
+        screen.blit(overlay, (0, 0))
+
+    pygame.draw.circle(screen, (255, 255, 255), (WIDTH // 2, HEIGHT // 2), 5, 1)
+    draw_hud(
+        screen,
+        font,
+        score,
+        state["combo"],
+        state["lasso_state"],
+        state["hp"],
+        state["round_state"],
+        state["wave"],
+        state["rope_boost_timer"],
+        boss_status,
+        room_name,
+        state.get("keys", 0),
+    )
+
+    if state["wave_spawn_timer"] > 0:
+        nxt = font.render(f"NEXT WAVE IN {state['wave_spawn_timer']:.1f}s", True, (255, 220, 120))
+        screen.blit(nxt, (WIDTH // 2 - 130, 24))
+    elif any(p.get("kind") == "gate_key" for p in state["pickups"]):
+        gate_msg = font.render("GATE KEY DROPPED - GRAB IT TO UNLOCK NEXT ROOM", True, (255, 230, 120))
+        screen.blit(gate_msg, (WIDTH // 2 - 270, 24))
+
+    pygame.display.flip()

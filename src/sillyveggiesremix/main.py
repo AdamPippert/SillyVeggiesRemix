@@ -185,65 +185,19 @@ def main():
         else:
             prev_space = keys[pygame.K_SPACE]
 
-        game_rendering.draw_background(screen)
-        game_rendering.cast_rays(screen, state["px"], state["py"], state["angle"], game_world.is_wall)
-        game_rendering.draw_veggies(screen, state["px"], state["py"], state["angle"], state["veggies"])
-        game_rendering.draw_pickups(screen, state["px"], state["py"], state["angle"], state["pickups"])
-        game_rendering.draw_gates(screen, state["px"], state["py"], state["angle"], game_world.GATE_SEGMENTS, game_world.CURRENT_GATE_LOCKS)
-        game_rendering.draw_hazards(screen, state["px"], state["py"], state["angle"], state["hazards"])
-        game_rendering.draw_projectiles(screen, state["px"], state["py"], state["angle"], state["shots"])
-        game_rendering.draw_minimap(
-            screen,
-            state["px"],
-            state["py"],
-            state["veggies"],
-            state["shots"],
-            state["pickups"],
-            state["hazards"],
-            game_world.WORLD_MAP,
-            game_world.GATE_SEGMENTS,
-            game_world.CURRENT_GATE_LOCKS,
-        )
-
-        if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):
-            target = state["veggies"][state["lasso_target"]]
-            if not target["captured"]:
-                proj = game_rendering.project_sprite(state["px"], state["py"], state["angle"], target["x"], target["y"])
-                if proj is not None:
-                    tx, ty, _, _ = proj
-                    pygame.draw.line(screen, (245, 240, 170), (WIDTH // 2, HEIGHT // 2), (tx, ty), 2)
-
-        if state["player_invuln"] > 0:
-            flash = 130 if int(state["player_invuln"] * 20) % 2 == 0 else 0
-            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            overlay.fill((255, 40, 40, flash // 3))
-            screen.blit(overlay, (0, 0))
-
-        pygame.draw.circle(screen, (255, 255, 255), (WIDTH // 2, HEIGHT // 2), 5, 1)
         boss_status = game_systems.get_boss_status(state["veggies"])
-        game_rendering.draw_hud(
-            screen,
-            font,
-            score,
-            state["combo"],
-            state["lasso_state"],
-            state["hp"],
-            state["round_state"],
-            state["wave"],
-            state["rope_boost_timer"],
-            boss_status,
-            current_room["name"],
-            state.get("keys", 0),
+        game_rendering.present_frame(
+            screen=screen,
+            font=font,
+            state=state,
+            score=score,
+            room_name=current_room["name"],
+            world_map=game_world.WORLD_MAP,
+            gate_segments=game_world.GATE_SEGMENTS,
+            gate_locks=game_world.CURRENT_GATE_LOCKS,
+            is_wall_fn=game_world.is_wall,
+            boss_status=boss_status,
         )
-
-        if state["wave_spawn_timer"] > 0:
-            nxt = font.render(f"NEXT WAVE IN {state['wave_spawn_timer']:.1f}s", True, (255, 220, 120))
-            screen.blit(nxt, (WIDTH // 2 - 130, 24))
-        elif any(p.get("kind") == "gate_key" for p in state["pickups"]):
-            gate_msg = font.render("GATE KEY DROPPED - GRAB IT TO UNLOCK NEXT ROOM", True, (255, 230, 120))
-            screen.blit(gate_msg, (WIDTH // 2 - 270, 24))
-
-        pygame.display.flip()
 
 
 if __name__ == "__main__":

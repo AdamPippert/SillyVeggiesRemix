@@ -55,6 +55,7 @@ python -m sillyveggiesremix.main --telemetry-file ./run_telemetry.jsonl
 - Telemetry log export now records per-run balancing metrics (damage sources, pickups, waves, room reached)
 - Core logic now split into modules: `systems.py`, `entities.py`, `content.py`, `runtime.py`, `rendering.py`, `world.py`, and `gameplay.py`
 - `main.py` now retains runtime loop/bootstrap + high-level orchestration only
+- Frame presentation path consolidated in `rendering.present_frame(...)`
 - Deterministic runtime smoke script added: `python scripts/smoke_runtime.py`
 - Pickups spawn per wave: health canisters and rope-boost canisters
 - Boss Turnip appears every 5th wave with lasso-only weak-point phases (exposed vs armored)
@@ -92,3 +93,4 @@ python -m sillyveggiesremix.main --telemetry-file ./run_telemetry.jsonl
 - [x] Remove superseded gameplay helper duplication from `main.py`
 - [x] Extract world query/collision helpers into `world.py`
 - [x] Extract alive-state gameplay orchestration into `gameplay.py`
+- [x] Consolidate final frame presentation into `rendering.present_frame(...)`
