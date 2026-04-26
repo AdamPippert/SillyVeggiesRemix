@@ -1,5 +1,4 @@
 import math
-import random
 import sys
 from pathlib import Path
 
@@ -8,6 +7,7 @@ import pygame
 from .entities import AudioBank as EntityAudioBank
 from . import content as game_content
 from . import rendering as game_rendering
+from . import world as game_world
 from . import runtime as game_runtime
 from . import systems as game_systems
 
@@ -18,77 +18,11 @@ ROPE_BASE_PULL = game_content.ROPE_BASE_PULL
 ROPE_BOOST_MULT = game_content.ROPE_BOOST_MULT
 ROPE_BOOST_DURATION = game_content.ROPE_BOOST_DURATION
 BOSS_WAVE_INTERVAL = game_content.BOSS_WAVE_INTERVAL
-WORLD_MAP = game_content.WORLD_MAP
 ROOM_WAVES_REQUIRED = game_content.ROOM_WAVES_REQUIRED
 ROOMS = game_content.ROOMS
-GATE_SEGMENTS = game_content.GATE_SEGMENTS
-CURRENT_GATE_LOCKS = list(game_content.CURRENT_GATE_LOCKS)
 SAVE_VERSION = 1
 DEFAULT_SAVE_FILE = "run_save.json"
 DEFAULT_TELEMETRY_FILE = "run_telemetry.jsonl"
-
-
-def sync_gate_locks(unlocked_keys: int):
-    global CURRENT_GATE_LOCKS
-    CURRENT_GATE_LOCKS = [idx >= unlocked_keys for idx in range(len(GATE_SEGMENTS))]
-
-
-def gate_blocked(x: float, y: float) -> bool:
-    for idx, g in enumerate(GATE_SEGMENTS):
-        if idx < len(CURRENT_GATE_LOCKS) and CURRENT_GATE_LOCKS[idx]:
-            if abs(x - g["x"]) < 0.22 and g["y1"] <= y <= g["y2"]:
-                return True
-    return False
-
-
-def is_wall(x: float, y: float) -> bool:
-    if y < 0 or y >= len(WORLD_MAP) or x < 0 or x >= len(WORLD_MAP[0]):
-        return True
-    if WORLD_MAP[int(y)][int(x)] == "#":
-        return True
-    return gate_blocked(x, y)
-
-
-def has_line_of_sight(x1: float, y1: float, x2: float, y2: float) -> bool:
-    dx = x2 - x1
-    dy = y2 - y1
-    dist = math.hypot(dx, dy)
-    if dist <= 0.0001:
-        return True
-    steps = max(2, int(dist * 18))
-    for i in range(1, steps):
-        t = i / steps
-        x = x1 + dx * t
-        y = y1 + dy * t
-        if is_wall(x, y):
-            return False
-    return True
-
-
-def random_open_position(min_dist_from_player=0.0, px=0.0, py=0.0, bounds=None):
-    open_tiles = []
-    bx1 = by1 = bx2 = by2 = None
-    if bounds is not None:
-        bx1, by1, bx2, by2 = bounds
-
-    for y, row in enumerate(WORLD_MAP):
-        for x, ch in enumerate(row):
-            if ch == "#":
-                continue
-            cx = x + 0.5
-            cy = y + 0.5
-            if bounds is not None and not (bx1 <= cx <= bx2 and by1 <= cy <= by2):
-                continue
-            if gate_blocked(cx, cy):
-                continue
-            if math.hypot(cx - px, cy - py) >= min_dist_from_player:
-                open_tiles.append((cx, cy))
-    if not open_tiles:
-        return 1.5, 1.5
-    return random.choice(open_tiles)
-
-
-
 
 
 
@@ -97,7 +31,7 @@ def reset_round():
     start_wave = 1
     room_index = 0
     room_bounds = ROOMS[room_index]["bounds"]
-    sync_gate_locks(0)
+    game_world.sync_gate_locks(0)
     return {
         "px": px,
         "py": py,
@@ -141,9 +75,9 @@ def main():
     audio.init()
 
     game_systems.configure(
-        is_wall,
-        has_line_of_sight,
-        random_open_position,
+        game_world.is_wall,
+        game_world.has_line_of_sight,
+        game_world.random_open_position,
         {"BOSS_WAVE_INTERVAL": BOSS_WAVE_INTERVAL, "ROPE_BOOST_DURATION": ROPE_BOOST_DURATION},
     )
 
@@ -151,7 +85,7 @@ def main():
 
     if args.load_file:
         try:
-            state, score, prev_space, run_seed = game_runtime.load_run(Path(args.load_file), SAVE_VERSION, sync_gate_locks)
+            state, score, prev_space, run_seed = game_runtime.load_run(Path(args.load_file), SAVE_VERSION, game_world.sync_gate_locks)
             run_metrics = game_runtime.init_run_metrics(run_seed, loaded_from=str(Path(args.load_file).expanduser()))
             print(f"[load] startup restored {Path(args.load_file).expanduser()}")
         except Exception as e:
@@ -185,7 +119,7 @@ def main():
                     try:
                         if telemetry_enabled:
                             game_runtime.flush_run_metrics(telemetry_path, run_metrics, "manual_load", state, score)
-                        state, score, prev_space, run_seed = game_runtime.load_run(save_path, SAVE_VERSION, sync_gate_locks)
+                        state, score, prev_space, run_seed = game_runtime.load_run(save_path, SAVE_VERSION, game_world.sync_gate_locks)
                         run_metrics = game_runtime.init_run_metrics(run_seed, loaded_from=str(save_path))
                         print(f"[load] restored {save_path}")
                     except Exception as e:
@@ -210,7 +144,7 @@ def main():
 
         state["player_invuln"] = max(0.0, state["player_invuln"] - dt)
         state["rope_boost_timer"] = max(0.0, state["rope_boost_timer"] - dt)
-        sync_gate_locks(state.get("keys", 0))
+        game_world.sync_gate_locks(state.get("keys", 0))
         current_room = ROOMS[state.get("room_index", 0)]
         room_bounds = current_room["bounds"]
 
@@ -244,9 +178,9 @@ def main():
                 next_x -= dy * move_speed
                 next_y += dx * move_speed
 
-            if not is_wall(next_x, state["py"]):
+            if not game_world.is_wall(next_x, state["py"]):
                 state["px"] = next_x
-            if not is_wall(state["px"], next_y):
+            if not game_world.is_wall(state["px"], next_y):
                 state["py"] = next_y
 
             new_shots, new_hazards = game_systems.update_veggies(state["veggies"], state["px"], state["py"], dt, state["wave"], room_bounds)
@@ -282,7 +216,7 @@ def main():
                 game_runtime.telemetry_add_pickup(run_metrics, pk, cnt)
             if keys_found > 0:
                 run_metrics["gate_keys_collected"] = int(run_metrics.get("gate_keys_collected", 0)) + keys_found
-                state["keys"] = min(len(GATE_SEGMENTS), state.get("keys", 0) + keys_found)
+                state["keys"] = min(len(game_world.GATE_SEGMENTS), state.get("keys", 0) + keys_found)
                 new_room_index = min(len(ROOMS) - 1, state["room_index"] + keys_found)
                 if new_room_index != state["room_index"]:
                     state["room_index"] = new_room_index
@@ -362,7 +296,7 @@ def main():
                     tdx, tdy = tx - state["px"], ty - state["py"]
                     dist = math.hypot(tdx, tdy)
 
-                    if dist > 7.0 or not has_line_of_sight(state["px"], state["py"], tx, ty):
+                    if dist > 7.0 or not game_world.has_line_of_sight(state["px"], state["py"], tx, ty):
                         target["latched"] = False
                         state["lasso_state"] = "idle"
                         state["lasso_target"] = None
@@ -376,7 +310,7 @@ def main():
                                 nx, ny = tdx / dist, tdy / dist
                                 nx_pos = target["x"] - nx * pull
                                 ny_pos = target["y"] - ny * pull
-                                if not is_wall(nx_pos, ny_pos):
+                                if not game_world.is_wall(nx_pos, ny_pos):
                                     target["x"] = nx_pos
                                     target["y"] = ny_pos
 
@@ -444,7 +378,7 @@ def main():
                             and state.get("room_wave", 1) >= ROOM_WAVES_REQUIRED
                             and not has_gate_key_drop
                         ):
-                            kx, ky = random_open_position(1.4, state["px"], state["py"], room_bounds)
+                            kx, ky = game_world.random_open_position(1.4, state["px"], state["py"], room_bounds)
                             state["pickups"].append({"kind": "gate_key", "x": kx, "y": ky, "ttl": 90.0})
                             state["wave_spawn_timer"] = 0.0
                         else:
@@ -459,10 +393,10 @@ def main():
             prev_space = keys[pygame.K_SPACE]
 
         game_rendering.draw_background(screen)
-        game_rendering.cast_rays(screen, state["px"], state["py"], state["angle"], is_wall)
+        game_rendering.cast_rays(screen, state["px"], state["py"], state["angle"], game_world.is_wall)
         game_rendering.draw_veggies(screen, state["px"], state["py"], state["angle"], state["veggies"])
         game_rendering.draw_pickups(screen, state["px"], state["py"], state["angle"], state["pickups"])
-        game_rendering.draw_gates(screen, state["px"], state["py"], state["angle"], GATE_SEGMENTS, CURRENT_GATE_LOCKS)
+        game_rendering.draw_gates(screen, state["px"], state["py"], state["angle"], game_world.GATE_SEGMENTS, game_world.CURRENT_GATE_LOCKS)
         game_rendering.draw_hazards(screen, state["px"], state["py"], state["angle"], state["hazards"])
         game_rendering.draw_projectiles(screen, state["px"], state["py"], state["angle"], state["shots"])
         game_rendering.draw_minimap(
@@ -473,9 +407,9 @@ def main():
             state["shots"],
             state["pickups"],
             state["hazards"],
-            WORLD_MAP,
-            GATE_SEGMENTS,
-            CURRENT_GATE_LOCKS,
+            game_world.WORLD_MAP,
+            game_world.GATE_SEGMENTS,
+            game_world.CURRENT_GATE_LOCKS,
         )
 
         if state["lasso_target"] is not None and state["lasso_target"] < len(state["veggies"]):

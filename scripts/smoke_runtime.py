@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sillyveggiesremix import main
 from sillyveggiesremix import runtime
+from sillyveggiesremix import world
 
 
 def fail(msg: str):
@@ -20,9 +21,9 @@ def run():
 
         seed = 1337
         main.game_systems.configure(
-            main.is_wall,
-            main.has_line_of_sight,
-            main.random_open_position,
+            world.is_wall,
+            world.has_line_of_sight,
+            world.random_open_position,
             {
                 "BOSS_WAVE_INTERVAL": main.BOSS_WAVE_INTERVAL,
                 "ROPE_BOOST_DURATION": main.ROPE_BOOST_DURATION,
@@ -38,9 +39,9 @@ def run():
         if not save_path.exists():
             fail("save file was not created")
 
-        state1, score1, prev1, seed1 = runtime.load_run(save_path, main.SAVE_VERSION, main.sync_gate_locks)
+        state1, score1, prev1, seed1 = runtime.load_run(save_path, main.SAVE_VERSION, world.sync_gate_locks)
         r1 = random.random()
-        state2, score2, prev2, seed2 = runtime.load_run(save_path, main.SAVE_VERSION, main.sync_gate_locks)
+        state2, score2, prev2, seed2 = runtime.load_run(save_path, main.SAVE_VERSION, world.sync_gate_locks)
         r2 = random.random()
 
         if score1 != score or score2 != score:
